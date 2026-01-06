@@ -5,7 +5,6 @@ OCR document understanding LLM service.
 import os
 import time
 import mlflow
-from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.chat_service.utils.logger import get_logger
@@ -15,6 +14,12 @@ logger = get_logger(__name__)
 # --------------------------------------------------
 # Environment validation
 # --------------------------------------------------
+def _get_gemini_client():
+    from google import genai
+    return genai
+genai = _get_gemini_client()
+
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not configured")
@@ -22,8 +27,9 @@ if not GEMINI_API_KEY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_NAME = "models/gemini-flash-latest"
 
-mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-mlflow.set_experiment("curamyn_llm_services")
+if os.getenv("ENV") != "test":
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+    mlflow.set_experiment("curamyn_llm_services")
 
 
 def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:

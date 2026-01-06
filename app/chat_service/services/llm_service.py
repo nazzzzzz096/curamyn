@@ -14,7 +14,6 @@ import hashlib
 
 import mlflow
 from dotenv import load_dotenv
-from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.chat_service.utils.logger import get_logger
@@ -28,6 +27,12 @@ load_dotenv()
 # --------------------------------------------------
 # Environment validation (NEW)
 # --------------------------------------------------
+def _get_gemini_client():
+    from google import genai
+    return genai
+
+genai = _get_gemini_client()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not configured")
@@ -35,8 +40,9 @@ if not GEMINI_API_KEY:
 # --------------------------------------------------
 # MLflow setup
 # --------------------------------------------------
-mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-mlflow.set_experiment("curamyn_llm_services")
+if os.getenv("ENV") != "test":
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+    mlflow.set_experiment("curamyn_llm_services")
 
 # --------------------------------------------------
 # Gemini setup
