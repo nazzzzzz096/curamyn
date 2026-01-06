@@ -23,6 +23,13 @@ from app.chat_service.services.safety_guard import (
     detect_emergency,
     SafetyViolation,
 )
+from app.chat_service.repositories.session_repositories import (
+    store_session_summary,
+)
+from app.chat_service.services.session_summary_service import (
+    generate_session_summary,
+)
+
 from app.consent_service.service import get_user_consent
 
 from app.chat_service.utils.logger import get_logger
@@ -192,6 +199,22 @@ def run_interaction(
         "Interaction completed",
         extra={"session_id": session_id},
     )
+    # ---------------- MEMORY STORAGE ---------------- #
+    if consent.get("memory") and user_id:
+        try:
+            summary = generate_session_summary(state.__dict__)
+            store_session_summary(
+            session_id=session_id,
+            user_id=user_id,
+            summary=summary,
+        )
+            logger.info("Session memory stored | session=%s", session_id)
+        except Exception as exc:
+            logger.warning(
+            "Memory storage failed | session=%s | error=%s",
+            session_id,
+            exc,
+        )
 
     return build_response(
         llm_result=llm_result,
