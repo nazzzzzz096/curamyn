@@ -90,7 +90,7 @@ def get_user_consent(user_id: str) -> dict:
             extra={"user_id": user_id, "error": str(exc)},
         )
 
-        # ✅ SAFE FALLBACK (CI + prod-safe)
+        #  SAFE FALLBACK (CI + prod-safe)
         return {
             "user_id": user_id,
             "voice": False,
