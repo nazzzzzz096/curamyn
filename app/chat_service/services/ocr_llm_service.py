@@ -1,36 +1,79 @@
 """
 OCR document understanding LLM service.
+Safe for CI and tests.
 """
 
 import os
 import time
+from contextlib import nullcontext
+from types import SimpleNamespace
+
 import mlflow
-from google.genai.types import GenerateContentConfig
+from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
+load_dotenv()
 
-# --------------------------------------------------
-# Environment validation
-# --------------------------------------------------
-def _get_gemini_client():
-    from google import genai
-    return genai
-genai = _get_gemini_client()
-
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY not configured")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_NAME = "models/gemini-flash-latest"
 
-if os.getenv("ENV") != "test":
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-    mlflow.set_experiment("curamyn_llm_services")
+# --------------------------------------------------
+# Test-safe dummy client (for patching & imports)
+# --------------------------------------------------
+if os.getenv("ENV") == "test":
+    client = SimpleNamespace(
+        models=SimpleNamespace(
+            generate_content=lambda *args, **kwargs: None
+        )
+    )
+else:
+    client = None
 
+
+# ==================================================
+# Lazy loaders
+# ==================================================
+
+def _load_gemini():
+    """
+    Lazily load Gemini only outside test environments.
+    """
+    if os.getenv("ENV") == "test":
+        return None, None
+
+    try:
+        from google import generativeai as genai
+        from google.generativeai.types import GenerationConfig
+
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning("GEMINI_API_KEY missing for OCR")
+            return None, None
+
+        genai.configure(api_key=api_key)
+        return genai, GenerationConfig
+
+    except Exception as exc:
+        logger.warning("Gemini OCR unavailable: %s", exc)
+        return None, None
+
+
+def _mlflow_context():
+    if os.getenv("ENV") == "test":
+        return nullcontext()
+
+    try:
+        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+        mlflow.set_experiment("curamyn_llm_services")
+        return mlflow.start_run(nested=True)
+    except Exception:
+        return nullcontext()
+
+
+# ==================================================
+# Public API
+# ==================================================
 
 def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     """
@@ -49,21 +92,32 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             "This document does not appear to be a medical laboratory report."
         )
 
+    global client
+
+    if client is not None:
+        active_client = client
+        GenerationConfig = None
+    else:
+        active_client, GenerationConfig = _load_gemini()
+
+    if active_client is None:
+        return _fallback_text_response()
+
     start = time.time()
 
-    with mlflow.start_run(nested=True):
+    with _mlflow_context():
         mlflow.set_tag("service", "ocr_document_llm")
 
         prompt = _build_prompt(text)
 
         try:
-            response = client.models.generate_content(
+            response = active_client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
-                config=GenerateContentConfig(
+                generation_config=GenerationConfig(
                     temperature=0.2,
                     max_output_tokens=400,
-                ),
+                ) if GenerationConfig else None,
             )
             output = _extract_llm_text(response)
 
@@ -84,7 +138,9 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         }
 
 
-# ---------------- HELPERS ---------------- #
+# ==================================================
+# Helpers
+# ==================================================
 
 def _fallback(message: str) -> dict:
     return {
@@ -94,11 +150,15 @@ def _fallback(message: str) -> dict:
     }
 
 
+def _fallback_text_response() -> dict:
+    return _fallback(_fallback_text())
+
+
 def _fallback_text() -> str:
     return (
-        "This appears to be a medical laboratory document.\n"
+        "This appears to be a medical laboratory document. "
         "However, the extracted text does not provide enough structure "
-        "to confidently summarize specific sections.\n"
+        "to confidently summarize specific sections. "
         "Please upload a clearer image."
     )
 
@@ -117,10 +177,10 @@ def _build_prompt(text: str) -> str:
 You are a medical document summarization system.
 
 RULES (STRICT):
-- NOT diagnosis
-- NO advice
-- NO normal/abnormal interpretation
-- NOT user-facing tone
+- NO diagnosis
+- NO medical advice
+- NO interpretation
+- Professional tone only
 - Multi-sentence output required
 
 Document Text:
@@ -133,3 +193,4 @@ def _extract_llm_text(response) -> str:
     if isinstance(text, str) and text.strip():
         return text.strip()
     return ""
+
