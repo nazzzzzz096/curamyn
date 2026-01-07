@@ -8,7 +8,6 @@ import os
 import io
 import time
 from typing import Dict
-from contextlib import nullcontext
 
 from PIL import Image
 import torch
@@ -19,6 +18,7 @@ import mlflow
 from app.chat_service.services.model_loader import load_cnn_model_from_s3
 from app.chat_service.utils.logger import get_logger
 from app.chat_service.config import settings
+from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
 
@@ -40,38 +40,6 @@ _TRANSFORM = transforms.Compose(
 # Model cache
 # --------------------------------------------------
 _MODEL_CACHE: Dict[str, nn.Module] = {}
-
-
-# --------------------------------------------------
-# Safe MLflow context (CRITICAL FOR TESTS & CI)
-# --------------------------------------------------
-def _mlflow_context():
-    """
-    Return a safe MLflow context.
-
-    - Disabled completely during tests
-    - Never raises if MLflow is unavailable
-    """
-    if os.getenv("ENV") == "test":
-        return nullcontext()
-
-    try:
-        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-        mlflow.set_experiment("curamyn_llm_services")
-        return mlflow.start_run(nested=True)
-    except Exception:
-        logger.warning("MLflow unavailable, running inference without tracking")
-        return nullcontext()
-
-
-def _safe_mlflow_call(func, *args, **kwargs):
-    """
-    Execute an MLflow call safely without breaking inference.
-    """
-    try:
-        func(*args, **kwargs)
-    except Exception:
-        pass
 
 
 # --------------------------------------------------
@@ -136,10 +104,10 @@ def predict_risk(
         logger.error("Failed to decode image")
         raise ValueError("Invalid image data") from exc
 
-    with _mlflow_context():
-        _safe_mlflow_call(mlflow.set_tag, "service", "cnn_inference")
-        _safe_mlflow_call(mlflow.set_tag, "image_type", image_type)
-        _safe_mlflow_call(
+    with mlflow_context():
+        mlflow_safe(mlflow.set_tag, "service", "cnn_inference")
+        mlflow_safe(mlflow.set_tag, "image_type", image_type)
+        mlflow_safe(
             mlflow.set_tag,
             "model_type",
             model_map[image_type],
@@ -154,7 +122,7 @@ def predict_risk(
                 probability = torch.sigmoid(logits).item()
 
         except Exception as exc:
-            _safe_mlflow_call(mlflow.set_tag, "status", "failed")
+            mlflow_safe(mlflow.set_tag, "status", "failed")
             logger.exception("CNN inference failed")
             raise RuntimeError("Model inference failed") from exc
 
@@ -166,10 +134,10 @@ def predict_risk(
 
         latency = time.time() - start_time
 
-        _safe_mlflow_call(mlflow.log_metric, "confidence", probability)
-        _safe_mlflow_call(mlflow.log_metric, "latency_sec", latency)
-        _safe_mlflow_call(mlflow.set_tag, "risk", risk)
-        _safe_mlflow_call(mlflow.set_tag, "status", "success")
+        mlflow_safe(mlflow.log_metric, "confidence", probability)
+        mlflow_safe(mlflow.log_metric, "latency_sec", latency)
+        mlflow_safe(mlflow.set_tag, "risk", risk)
+        mlflow_safe(mlflow.set_tag, "status", "success")
 
     logger.info(
         "CNN inference completed",

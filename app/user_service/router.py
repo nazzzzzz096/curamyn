@@ -5,6 +5,9 @@ Handles user signup and login workflows.
 """
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi import Depends
+from app.core.dependencies import get_current_user
+from app.chat_service.services.orchestrator.session_lifecycle import end_session
 
 from app.core.security import create_access_token
 from app.chat_service.utils.logger import get_logger
@@ -15,6 +18,7 @@ from app.user_service.schemas import (
     UserResponse,
 )
 from app.user_service.service import authenticate_user, create_user
+import uuid
 
 logger = get_logger(__name__)
 
@@ -64,7 +68,6 @@ def signup(payload: UserSignup) -> UserResponse:
             detail="Internal server error",
         ) from exc
 
-
 @router.post(
     "/login",
     response_model=TokenResponse,
@@ -73,15 +76,7 @@ def signup(payload: UserSignup) -> UserResponse:
 def login(payload: UserLogin) -> TokenResponse:
     """
     Authenticate user and issue JWT token.
-
-    Args:
-        payload (UserLogin): Login credentials.
-
-    Returns:
-        TokenResponse: JWT access token.
-
-    Raises:
-        HTTPException: If authentication fails.
+    Session starts here.
     """
     try:
         logger.info(
@@ -91,30 +86,56 @@ def login(payload: UserLogin) -> TokenResponse:
 
         user = authenticate_user(payload.email, payload.password)
 
+        session_id = str(uuid.uuid4())  # 🔑 START SESSION
+
         access_token = create_access_token(
-            {"sub": user["user_id"], "email": user["email"]}
+            {
+                "sub": user["user_id"],
+                "email": user["email"],
+                "session_id": session_id,  # optional but useful
+            }
         )
 
         logger.info(
             "Login successful",
-            extra={"email": payload.email},
+            extra={"email": payload.email, "session_id": session_id},
         )
 
-        return TokenResponse(access_token=access_token)
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "session_id": session_id,
+        }
 
     except ValueError:
-        logger.warning(
-            "Login failed",
-            extra={"email": payload.email},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
+        ...
 
-    except Exception as exc:
-        logger.exception("Unexpected error during login")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
-        ) from exc
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_200_OK,
+)
+def logout(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Logout user and end session.
+
+    Ends in-memory session, summarizes memory (if consented),
+    and deletes full session memory.
+    """
+    end_session(
+        session_id=session_id,
+        user_id=current_user["sub"],
+    )
+
+    logger.info(
+        "User logged out",
+        extra={
+            "user_id": current_user["sub"],
+            "session_id": session_id,
+        },
+    )
+
+    return {"message": "Logged out successfully"}

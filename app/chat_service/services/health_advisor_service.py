@@ -7,11 +7,11 @@ Provides supportive, non-diagnostic health guidance.
 import os
 import time
 import hashlib
-from contextlib import nullcontext
 
 import mlflow
 
 from app.chat_service.utils.logger import get_logger
+from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
 
@@ -19,12 +19,11 @@ MODEL_NAME = "models/gemini-flash-latest"
 
 
 # ==================================================
-# SAFE LAZY LOADERS (CRITICAL FOR TESTS)
+# SAFE LAZY GEMINI LOADER
 # ==================================================
-
 def _load_gemini():
     """
-    Safely load Gemini only in non-test environments.
+    Load Gemini client safely (disabled in tests).
     """
     if os.getenv("ENV") == "test":
         return None, None
@@ -35,48 +34,18 @@ def _load_gemini():
 
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            logger.warning("GEMINI_API_KEY missing, falling back")
             return None, None
 
-        client = genai.Client(api_key=api_key)
-        return client, GenerateContentConfig
+        return genai.Client(api_key=api_key), GenerateContentConfig
 
     except Exception as exc:
         logger.warning("Gemini unavailable: %s", exc)
         return None, None
 
 
-def _mlflow_context():
-    """
-    Disable MLflow completely during tests.
-    Never breaks inference if MLflow is unavailable.
-    """
-    if os.getenv("ENV") == "test":
-        return nullcontext()
-
-    try:
-        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-        mlflow.set_experiment("curamyn_health_advisor")
-        return mlflow.start_run(nested=True)
-    except Exception:
-        logger.warning("MLflow unavailable, running without tracking")
-        return nullcontext()
-
-
-def _safe_mlflow_call(func, *args, **kwargs):
-    """
-    Execute MLflow calls safely without affecting core logic.
-    """
-    try:
-        func(*args, **kwargs)
-    except Exception:
-        pass
-
-
 # ==================================================
 # PUBLIC ENTRY POINT
 # ==================================================
-
 def analyze_health_text(
     *,
     text: str,
@@ -93,8 +62,13 @@ def analyze_health_text(
     Returns non-diagnostic, safe responses only.
     """
     client, GenerateContentConfig = _load_gemini()
+    logger.error(
+    "ENV CHECK | ENV=%s | GEMINI_API_KEY=%s",
+    os.getenv("ENV"),
+    "SET" if os.getenv("GEMINI_API_KEY") else "MISSING",
+    )
 
-    # ---------------- TEST / FALLBACK MODE ----------------
+    # ---------------- FALLBACK MODE ----------------
     if client is None:
         return {
             "intent": "health_advice",
@@ -107,10 +81,10 @@ def analyze_health_text(
 
     start_time = time.time()
 
-    with _mlflow_context():
-        _safe_mlflow_call(mlflow.set_tag, "service", "health_advisor_llm")
+    with mlflow_context():
+        mlflow_safe(mlflow.set_tag, "service", "health_advisor_llm")
         if user_id:
-            _safe_mlflow_call(mlflow.set_tag, "user_id", user_id)
+            mlflow_safe(mlflow.set_tag, "user_id", user_id)
 
         prompt = _build_prompt(text, mode)
 
@@ -119,15 +93,42 @@ def analyze_health_text(
                 model=MODEL_NAME,
                 contents=prompt,
                 config=GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=300,
+                    temperature=0.6,
+                    max_output_tokens=400,
                 ),
             )
-            answer = response.text.strip() if response.text else ""
+            answer = _extract_text(response)
+            logger.warning("SELF_CARE LLM OUTPUT: %s", answer)
+            if not answer:
+                logger.warning("Gemini returned no visible text — retrying with forced output")
+
+                force_prompt = f"""
+Reply ONLY with plain text.
+No safety explanations.
+No refusal.
+No meta commentary.
+
+User message:
+{text}
+
+Start writing now.
+"""
+
+                response = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=force_prompt,
+                    config=GenerateContentConfig(
+                    temperature=0.8,
+                    max_output_tokens=400
+                    ),
+                )
+
+                answer = _extract_text(response)
+
 
         except Exception:
             logger.exception("Health advisor LLM failed")
-            _safe_mlflow_call(mlflow.set_tag, "status", "failed")
+            mlflow_safe(mlflow.set_tag, "status", "failed")
             answer = ""
 
         if not answer:
@@ -138,14 +139,14 @@ def analyze_health_text(
 
         latency = time.time() - start_time
 
-        _safe_mlflow_call(mlflow.log_param, "model", MODEL_NAME)
-        _safe_mlflow_call(
+        mlflow_safe(mlflow.log_param, "model", MODEL_NAME)
+        mlflow_safe(
             mlflow.log_param,
             "input_hash",
             hashlib.sha256(text.encode()).hexdigest(),
         )
-        _safe_mlflow_call(mlflow.log_metric, "latency_sec", latency)
-        _safe_mlflow_call(mlflow.set_tag, "status", "success")
+        mlflow_safe(mlflow.log_metric, "latency_sec", latency)
+        mlflow_safe(mlflow.set_tag, "status", "success")
 
         return {
             "intent": "health_advice",
@@ -157,37 +158,44 @@ def analyze_health_text(
 # ==================================================
 # PROMPT BUILDER
 # ==================================================
-
 def _build_prompt(text: str, mode: str) -> str:
-    """
-    Build prompt based on advisory mode.
-    """
     if mode == "self_care":
         return f"""
 You are a health information assistant.
 
 Rules:
-- Give practical self-care tips
 - No diagnosis
 - No medicine names
-- Gentle language
+- Gentle, encouraging language
 
-User:
+IMPORTANT:
+You MUST produce a response.
+You MUST include:
+1. One empathetic sentence
+2. 3-5 bullet-point self-care tips
+
+User message:
 {text}
 
-Response:
-- Start with 1 empathetic sentence
-- Then list 3–5 self-care tips
+Begin your reply now:
 """
 
-    return f"""
-You are a supportive health listener.
 
-Rules:
-- Emotional reassurance
-- No diagnosis
-- Gentle tone
+def _extract_text(response) -> str:
+    if not response:
+        return ""
 
-User:
-{text}
-"""
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        for c in candidates:
+            content = getattr(c, "content", None)
+            parts = getattr(content, "parts", None)
+            if parts:
+                for p in parts:
+                    if hasattr(p, "text") and p.text:
+                        return p.text.strip()
+    return ""

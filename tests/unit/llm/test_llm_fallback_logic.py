@@ -1,12 +1,19 @@
-from app.chat_service.services.llm_service import analyze_text
-from unittest.mock import patch
+def test_llm_uses_fallback_when_response_invalid(monkeypatch):
+    from app.chat_service.services import llm_service
 
-def test_llm_uses_fallback_when_response_invalid():
-    with patch(
-        "app.chat_service.services.llm_service.client.models.generate_content"
-    ) as mock_gen:
-        mock_gen.return_value.text = ""  # Force fallback
+    class FakeClient:
+        class models:
+            @staticmethod
+            def generate_content(*args, **kwargs):
+                return None  # invalid Gemini response
 
-        result = analyze_text(text="Hi")
+    monkeypatch.setattr(
+        llm_service,
+        "_load_gemini",
+        lambda: (FakeClient(), None),
+    )
 
-        assert result["response_text"] == "I'm here with you."
+    result = llm_service.analyze_text(text="Hello")
+
+    assert result["response_text"] == "I'm here with you."
+

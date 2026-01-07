@@ -2,9 +2,9 @@
 Session summary generation service.
 
 Creates a privacy-safe, high-level session summary.
+This service is ONLY called at session end.
 """
 
-import json
 from typing import Dict
 
 from app.chat_service.utils.logger import get_logger
@@ -21,6 +21,7 @@ def generate_session_summary(session_state: Dict) -> Dict:
     - No direct quotes
     - No personal identifiers
     - High-level abstraction only
+    - Called ONLY at session end
     """
     logger.info("Generating session summary")
 
@@ -28,28 +29,26 @@ def generate_session_summary(session_state: Dict) -> Dict:
     emotions = session_state.get("emotions", [])
     sentiments = session_state.get("sentiments", [])
 
+    # ---------- EMPTY SESSION GUARD ----------
     if not intents and not emotions and not sentiments:
         logger.warning("Empty session state received for summary")
         return _empty_summary()
 
     prompt = f"""
-Summarize the following mental wellness session.
+You are a system that generates SESSION SUMMARIES.
 
 STRICT RULES:
-- No direct quotes
-- No personal identifiers
-- High-level abstraction only
+- Do NOT use user quotes
+- Do NOT include personal data
+- Do NOT diagnose or advise
 - Output valid JSON ONLY
 
-Session Data:
+INPUT SIGNALS:
 Intents: {intents}
 Emotions: {emotions}
 Sentiments: {sentiments}
 
-Return JSON with:
-dominant_intent
-dominant_emotion
-sentiment_trend
+Return JSON exactly with:
 summary_text
 """
 
@@ -58,7 +57,7 @@ summary_text
 
         summary_text = result.get("response_text", "").strip()
         if not summary_text:
-            raise ValueError("Empty summary")
+            raise ValueError("Empty summary text")
 
         return {
             "summary_text": summary_text,
@@ -71,7 +70,7 @@ summary_text
 
 def _empty_summary() -> Dict:
     """
-    Safe fallback summary.
+    Deterministic fallback summary.
     """
     return {
         "summary_text": (

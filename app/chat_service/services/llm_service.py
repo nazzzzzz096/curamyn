@@ -10,84 +10,63 @@ import os
 import re
 import json
 import time
-from contextlib import nullcontext
+from types import SimpleNamespace
 
 import mlflow
 from dotenv import load_dotenv
-from types import SimpleNamespace
 
 from app.chat_service.utils.logger import get_logger
+from app.common.mlflow_control import mlflow_context, mlflow_safe
 
-# --------------------------------------------------
-# Setup
-# --------------------------------------------------
 logger = get_logger(__name__)
 load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
 
+# --------------------------------------------------
+# Test-safe dummy client (so unittest.patch works)
+# --------------------------------------------------
+class _NullGeminiClient:
+    """Safe null Gemini client."""
 
-# --------------------------------------------------
-# Test-safe dummy client for patching
-# --------------------------------------------------
-if os.getenv("ENV") == "test":
-    client = SimpleNamespace(
-        models=SimpleNamespace(
-            generate_content=lambda *args, **kwargs: None
-        )
-    )
-else:
-    client = None
+    class models:
+        @staticmethod
+        def generate_content(*args, **kwargs):
+            return None
+
 
 
 
 # ==================================================
-# SAFE LAZY LOADERS
+# Lazy Gemini loader
 # ==================================================
-
 def _load_gemini():
     """
-    Safely load Gemini only in non-test environments.
+    Load Gemini client or return a safe null client.
     """
-    if os.getenv("ENV") == "test":
-        return None, None
-
     try:
+        # Test env → always null client
+        if os.getenv("ENV") == "test":
+            return _NullGeminiClient(), None
+
         from google import genai
         from google.genai.types import GenerateContentConfig
 
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            logger.warning("GEMINI_API_KEY missing, using fallback")
-            return None, None
+            logger.warning("Gemini API key missing")
+            return _NullGeminiClient(), None
 
         return genai.Client(api_key=api_key), GenerateContentConfig
 
     except Exception as exc:
         logger.warning("Gemini unavailable: %s", exc)
-        return None, None
-
-
-def _mlflow_context():
-    """
-    Disable MLflow during tests and never let it break inference.
-    """
-    if os.getenv("ENV") == "test":
-        return nullcontext()
-
-    try:
-        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-        mlflow.set_experiment("curamyn_llm_services")
-        return mlflow.start_run(nested=True)
-    except Exception:
-        logger.warning("MLflow unavailable, running without tracking")
-        return nullcontext()
+        return _NullGeminiClient(), None
 
 
 # ==================================================
 # PUBLIC ENTRY POINT
 # ==================================================
-
 def analyze_text(
     *,
     text: str,
@@ -96,20 +75,12 @@ def analyze_text(
     """
     Voice psychologist / general chat LLM.
     """
-    global client
 
-    # --------------------------------------------------
-    # Respect patched client (UNIT TESTS)
-    # --------------------------------------------------
-    if client is not None:
-        active_client = client
-        GenerateContentConfig = None
-    else:
-        active_client, GenerateContentConfig = _load_gemini()
 
-    # --------------------------------------------------
-    # FALLBACK MODE
-    # --------------------------------------------------
+    # Respect patched client in unit tests
+    active_client, GenerateContentConfig = _load_gemini()
+    start_time = time.time()
+    # ---------------- FALLBACK MODE ----------------
     if active_client is None:
         return {
             "intent": "casual_chat",
@@ -121,15 +92,15 @@ def analyze_text(
 
     start_time = time.time()
 
-    with _mlflow_context():
+    with mlflow_context():
+        mlflow_safe(mlflow.set_tag, "service", "voice_psychologist_llm")
+        mlflow_safe(mlflow.set_tag, "pipeline", "voice_and_text")
+        mlflow_safe(mlflow.set_tag, "llm_provider", "gemini")
+
         if user_id:
-            mlflow.set_tag("user_id", user_id)
+            mlflow_safe(mlflow.set_tag, "user_id", user_id)
 
-        mlflow.set_tag("service", "voice_psychologist_llm")
-        mlflow.set_tag("pipeline", "voice_and_text")
-        mlflow.set_tag("llm_provider", "gemini")
-
-        # ---------------- STAGE 1: ANALYSIS ----------------
+        # -------- STAGE 1: ANALYSIS --------
         try:
             analysis = _analyze_intent(
                 text=text,
@@ -149,7 +120,7 @@ def analyze_text(
             sentiment = "neutral"
             emotion = "neutral"
 
-        # ---------------- STAGE 2: RESPONSE ----------------
+        # -------- STAGE 2: RESPONSE --------
         try:
             spoken_text = _generate_spoken_response(
                 text=text,
@@ -162,8 +133,8 @@ def analyze_text(
             spoken_text = "I'm here with you."
 
         latency = time.time() - start_time
-        mlflow.log_metric("latency_sec", latency)
-        mlflow.log_param("severity", severity)
+        mlflow_safe(mlflow.log_metric, "latency_sec", latency)
+        mlflow_safe(mlflow.log_param, "severity", severity)
 
         return {
             "intent": intent,
@@ -177,7 +148,6 @@ def analyze_text(
 # ==================================================
 # STAGE 1 — ANALYSIS
 # ==================================================
-
 def _analyze_intent(*, text: str, client, GenerateContentConfig) -> dict:
     prompt = f"""
 Analyze the user's message.
@@ -205,7 +175,6 @@ User:
 # ==================================================
 # STAGE 2 — RESPONSE
 # ==================================================
-
 def _generate_spoken_response(
     *,
     text: str,
@@ -258,7 +227,6 @@ User:
 # ==================================================
 # HELPERS
 # ==================================================
-
 def _extract_text(response) -> str | None:
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():

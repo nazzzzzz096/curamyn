@@ -5,13 +5,13 @@ Safe for CI and tests.
 
 import os
 import time
-from contextlib import nullcontext
 from types import SimpleNamespace
 
 import mlflow
 from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
+from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -21,20 +21,23 @@ MODEL_NAME = "models/gemini-flash-latest"
 # --------------------------------------------------
 # Test-safe dummy client (for patching & imports)
 # --------------------------------------------------
-if os.getenv("ENV") == "test":
-    client = SimpleNamespace(
-        models=SimpleNamespace(
-            generate_content=lambda *args, **kwargs: None
-        )
-    )
-else:
-    client = None
+class _NullGeminiClient:
+    """Null object for Gemini client (safe fallback)."""
+
+    class models:
+        @staticmethod
+        def generate_content(*args, **kwargs):
+            return None
+
+def _load_gemini():
+    if os.getenv("ENV") == "test":
+        return _NullGeminiClient(), None
+
 
 
 # ==================================================
-# Lazy loaders
+# Lazy Gemini loader
 # ==================================================
-
 def _load_gemini():
     """
     Lazily load Gemini only outside test environments.
@@ -48,7 +51,6 @@ def _load_gemini():
 
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            logger.warning("GEMINI_API_KEY missing for OCR")
             return None, None
 
         genai.configure(api_key=api_key)
@@ -59,22 +61,9 @@ def _load_gemini():
         return None, None
 
 
-def _mlflow_context():
-    if os.getenv("ENV") == "test":
-        return nullcontext()
-
-    try:
-        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-        mlflow.set_experiment("curamyn_llm_services")
-        return mlflow.start_run(nested=True)
-    except Exception:
-        return nullcontext()
-
-
 # ==================================================
 # Public API
 # ==================================================
-
 def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     """
     Summarize a medical laboratory document extracted via OCR.
@@ -94,6 +83,7 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
 
     global client
 
+    # Respect patched client in tests
     if client is not None:
         active_client = client
         GenerationConfig = None
@@ -105,8 +95,10 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
 
     start = time.time()
 
-    with _mlflow_context():
-        mlflow.set_tag("service", "ocr_document_llm")
+    with mlflow_context():
+        mlflow_safe(mlflow.set_tag, "service", "ocr_document_llm")
+        if user_id:
+            mlflow_safe(mlflow.set_tag, "user_id", user_id)
 
         prompt = _build_prompt(text)
 
@@ -129,7 +121,8 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             logger.warning("OCR LLM output too short — fallback applied")
             output = _fallback_text()
 
-        mlflow.log_metric("latency_sec", time.time() - start)
+        latency = time.time() - start
+        mlflow_safe(mlflow.log_metric, "latency_sec", latency)
 
         return {
             "intent": "document_understanding",
@@ -141,7 +134,6 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
 # ==================================================
 # Helpers
 # ==================================================
-
 def _fallback(message: str) -> dict:
     return {
         "intent": "document_understanding",
@@ -193,4 +185,5 @@ def _extract_llm_text(response) -> str:
     if isinstance(text, str) and text.strip():
         return text.strip()
     return ""
+
 

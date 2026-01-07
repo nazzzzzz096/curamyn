@@ -2,7 +2,12 @@
 Main orchestration pipeline.
 
 Coordinates multimodal input processing, safety checks,
-LLM routing, state management, and response generation.
+LLM routing, session state tracking, and response generation.
+
+IMPORTANT:
+- This module NEVER persists memory.
+- Session memory lives only in RAM.
+- Memory storage & cleanup are handled on session END (logout).
 """
 
 from typing import Dict, Any
@@ -15,6 +20,8 @@ from app.chat_service.services.orchestrator.response_builder import build_respon
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.health_advisor_service import analyze_health_text
 from app.chat_service.services.ocr_llm_service import analyze_ocr_text
+from app.chat_service.services.intent_classifier import classify_intent_llm
+
 
 # Safety & consent
 from app.chat_service.services.safety_guard import (
@@ -23,15 +30,8 @@ from app.chat_service.services.safety_guard import (
     detect_emergency,
     SafetyViolation,
 )
-from app.chat_service.repositories.session_repositories import (
-    store_session_summary,
-)
-from app.chat_service.services.session_summary_service import (
-    generate_session_summary,
-)
 
 from app.consent_service.service import get_user_consent
-
 from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,6 +40,7 @@ DEFAULT_DENY_CONSENT = {
     "voice": False,
     "image": False,
     "document": False,
+    "memory": False,
 }
 
 
@@ -55,19 +56,22 @@ def run_interaction(
     response_mode: str,
 ) -> Dict[str, Any]:
     """
-    Execute a full AI interaction cycle.
+    Execute a single AI interaction cycle.
 
-    Handles:
-    - Consent checks
+    Responsibilities:
+    - Consent validation
     - Input preprocessing
-    - Safety screening
+    - Safety checks
     - LLM routing
-    - Session state tracking
+    - Session state updates (RAM ONLY)
     - Response construction
 
-    Returns:
-        Dict[str, Any]: Final response payload.
+    This function NEVER:
+    - Stores memory
+    - Calls summarization
+    - Writes to database
     """
+
     logger.info(
         "Interaction started",
         extra={
@@ -77,9 +81,11 @@ def run_interaction(
         },
     )
 
+    # Load or create in-memory session
     state = SessionState.load(session_id)
     consent = get_user_consent(user_id) if user_id else DEFAULT_DENY_CONSENT
 
+    # ---------------- INPUT + SAFETY ----------------
     try:
         if audio:
             check_input_safety("audio", consent)
@@ -117,14 +123,22 @@ def run_interaction(
         }
 
     # ---------------- LLM ROUTING ----------------
+    logger.warning(
+    f"ROUTING DEBUG | "
+    f"text='{normalized_text}' | "
+    f"asks_for_self_care={_asks_for_self_care(normalized_text)} | "
+    f"is_health_query={_is_health_query(normalized_text)}"
+)
 
     try:
+        # AUDIO → GENERAL / VOICE CHAT
         if input_type == "audio":
             llm_result = analyze_text(
                 text=normalized_text,
                 user_id=user_id,
             )
 
+        # DOCUMENT IMAGE → OCR → SUMMARY
         elif input_type == "image" and image_type == "document":
             llm_result = analyze_ocr_text(
                 text=normalized_text,
@@ -132,6 +146,7 @@ def run_interaction(
             )
             state.last_document_text = normalized_text
 
+        # MEDICAL IMAGE → CNN ONLY (NO LLM RESPONSE)
         elif input_type == "image":
             image_analysis = context.get("image_analysis")
             if image_analysis:
@@ -142,6 +157,7 @@ def run_interaction(
                 "severity": "informational",
             }
 
+        # FOLLOW-UP AFTER IMAGE ANALYSIS
         elif input_type == "text" and state.last_image_analysis:
             llm_result = analyze_health_text(
                 text=(
@@ -153,18 +169,19 @@ def run_interaction(
                 ),
                 user_id=user_id,
             )
-        # ---- GENERAL CHAT FIRST ----
-        elif input_type == "text" and not _is_health_query(normalized_text):
-            llm_result = analyze_text(text=normalized_text, user_id=user_id)
 
+        # ---------------- TEXT ROUTING (FIXED ORDER) ----------------
 
-        elif _asks_for_self_care(normalized_text):
+        #  SELF-CARE FIRST
+
+        if _asks_for_self_care(normalized_text):
             llm_result = analyze_health_text(
                 text=normalized_text,
                 user_id=user_id,
                 mode="self_care",
             )
 
+        # 2 HEALTH SUPPORT
         elif _is_health_query(normalized_text):
             llm_result = analyze_health_text(
                 text=normalized_text,
@@ -172,26 +189,41 @@ def run_interaction(
                 mode="support",
             )
 
+        # Ambiguous → LLM intent classifier
         else:
-            llm_result = analyze_text(
+            intent = classify_intent_llm(normalized_text)
+            if intent == "self_care":
+                llm_result = analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+            mode="self_care",
+                )
+            elif intent == "health_support":
+                llm_result = analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+            mode="support",
+               ) 
+            else:
+                llm_result = analyze_text(
                 text=normalized_text,
                 user_id=user_id,
-            )
+                )
 
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "LLM processing failed",
             extra={"session_id": session_id},
         )
         return {"message": "Something went wrong while processing your request."}
 
-    # ---------------- STATE UPDATE ----------------
+    # ---------------- SESSION STATE UPDATE ----------------
     try:
         state.update_from_llm(llm_result)
         state.save()
     except Exception as exc:
         logger.error(
-            "Failed to persist session state",
+            "Failed to update session state",
             extra={"session_id": session_id, "error": str(exc)},
         )
 
@@ -199,23 +231,8 @@ def run_interaction(
         "Interaction completed",
         extra={"session_id": session_id},
     )
-    # ---------------- MEMORY STORAGE ---------------- #
-    if consent.get("memory") and user_id:
-        try:
-            summary = generate_session_summary(state.__dict__)
-            store_session_summary(
-            session_id=session_id,
-            user_id=user_id,
-            summary=summary,
-        )
-            logger.info("Session memory stored | session=%s", session_id)
-        except Exception as exc:
-            logger.warning(
-            "Memory storage failed | session=%s | error=%s",
-            session_id,
-            exc,
-        )
 
+    # ---------------- RESPONSE ----------------
     return build_response(
         llm_result=llm_result,
         context=context,
@@ -225,35 +242,56 @@ def run_interaction(
 
 
 # ---------------- PRIVATE HELPERS ----------------
-
 def _asks_for_self_care(text: str) -> bool:
-    """Detect self-care related user queries."""
+    """
+    Detect self-care or wellness improvement queries.
+    """
+    lowered = text.lower()
+
     triggers = [
         "self care",
         "self-care",
-        "what can i do",
-        "what should i do",
-        "give me tips",
-        "care tips",
-        "how to manage",
+        "improve my health",
+        "improve health",
+        "feel healthier",
+        "be healthier",
+        "how can i improve",
+        "how to improve",
+        "stay healthy",
+        "healthy habits",
+        "what should i do to",
+        "what can i do to",
+        "help me improve",
     ]
-    text = text.lower()
-    return any(t in text for t in triggers)
+
+    return any(trigger in lowered for trigger in triggers)
+
 
 
 def _is_health_query(text: str) -> bool:
-    """Detect symptom-related health queries."""
+    """
+    Detect symptom-based or distress-based health queries.
+    """
+    lowered = text.lower()
+
     symptoms = [
+        "pain",
+        "ache",
+        "dizzy",
         "dizziness",
         "nausea",
-        "vomiting",
+        "vomit",
         "headache",
         "fever",
-        "pain",
         "weak",
-        "stomach",
-        "cough",
-        "cold",
+        "anxious",
+        "anxiety",
+        "panic",
+        "stress",
+        "worried",
+        "can't sleep",
+        "not feeling well",
     ]
-    text = text.lower()
-    return any(s in text for s in symptoms)
+
+    return any(symptom in lowered for symptom in symptoms)
+
