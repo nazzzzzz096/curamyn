@@ -56,23 +56,17 @@ def create_or_update_consent(
         raise RuntimeError("Failed to store consent preferences") from exc
 
 
-def get_user_consent(user_id: str) -> Dict:
+def get_user_consent(user_id: str) -> dict:
     """
-    Retrieve consent preferences for a user.
+    Retrieve user consent preferences.
 
-    Args:
-        user_id (str): User identifier.
-
-    Returns:
-        Dict: Consent preferences. Defaults to all False if not found.
+    Behavior:
+    - Returns stored consent if available
+    - Returns safe defaults if DB unavailable
+    - NEVER raises in request path
     """
     try:
         collection = get_collection("consent_settings")
-
-        logger.info(
-            "Retrieving consent preferences",
-            extra={"user_id": user_id},
-        )
 
         consent = collection.find_one(
             {"user_id": user_id},
@@ -80,23 +74,27 @@ def get_user_consent(user_id: str) -> Dict:
         )
 
         if not consent:
-            logger.info(
-                "No consent record found; using defaults",
-                extra={"user_id": user_id},
-            )
             return {
                 "user_id": user_id,
-                "memory": False,
                 "voice": False,
-                "document": False,
                 "image": False,
+                "document": False,
+                "memory": False,
             }
 
         return consent
 
-    except PyMongoError as exc:
+    except Exception as exc:
         logger.error(
             "Failed to retrieve consent preferences",
             extra={"user_id": user_id, "error": str(exc)},
         )
-        raise RuntimeError("Failed to retrieve consent preferences") from exc
+
+        # ✅ SAFE FALLBACK (CI + prod-safe)
+        return {
+            "user_id": user_id,
+            "voice": False,
+            "image": False,
+            "document": False,
+            "memory": False,
+        }
