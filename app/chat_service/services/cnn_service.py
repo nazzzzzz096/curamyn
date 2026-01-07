@@ -3,10 +3,12 @@ CNN-based image risk analysis service.
 
 Performs non-diagnostic risk assessment on medical images.
 """
+
 import os
 import io
 import time
 from typing import Dict
+from contextlib import nullcontext
 
 from PIL import Image
 import torch
@@ -33,21 +35,57 @@ _TRANSFORM = transforms.Compose(
         ),
     ]
 )
-# --------------------------------------------------
-# MLflow setup
-# --------------------------------------------------
-mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-mlflow.set_experiment("curamyn_llm_services")
+
 # --------------------------------------------------
 # Model cache
 # --------------------------------------------------
 _MODEL_CACHE: Dict[str, nn.Module] = {}
 
 
+# --------------------------------------------------
+# Safe MLflow context (CRITICAL FOR TESTS & CI)
+# --------------------------------------------------
+def _mlflow_context():
+    """
+    Return a safe MLflow context.
+
+    - Disabled completely during tests
+    - Never raises if MLflow is unavailable
+    """
+    if os.getenv("ENV") == "test":
+        return nullcontext()
+
+    try:
+        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+        mlflow.set_experiment("curamyn_llm_services")
+        return mlflow.start_run(nested=True)
+    except Exception:
+        logger.warning("MLflow unavailable, running inference without tracking")
+        return nullcontext()
+
+
+def _safe_mlflow_call(func, *args, **kwargs):
+    """
+    Execute an MLflow call safely without breaking inference.
+    """
+    try:
+        func(*args, **kwargs)
+    except Exception:
+        pass
+
+
+# --------------------------------------------------
+# Model loader
+# --------------------------------------------------
 def _get_model(model_type: str) -> nn.Module:
-    """Load and cache CNN model."""
+    """
+    Load and cache CNN model by type.
+    """
     if model_type not in _MODEL_CACHE:
-        logger.info("Loading CNN model", extra={"model_type": model_type})
+        logger.info(
+            "Loading CNN model",
+            extra={"model_type": model_type},
+        )
 
         model = load_cnn_model_from_s3(
             model_type=model_type,
@@ -60,13 +98,23 @@ def _get_model(model_type: str) -> nn.Module:
     return _MODEL_CACHE[model_type]
 
 
+# --------------------------------------------------
+# Public API
+# --------------------------------------------------
 def predict_risk(
     *,
     image_type: str,
     image_bytes: bytes,
 ) -> Dict[str, float | str]:
     """
-    Perform risk analysis on a medical image.
+    Perform non-diagnostic CNN-based risk analysis on a medical image.
+
+    Args:
+        image_type: Type of image (e.g., "xray", "skin").
+        image_bytes: Raw image bytes.
+
+    Returns:
+        Dictionary with risk level and confidence score.
     """
     model_map = {
         "xray": "x_ray",
@@ -88,11 +136,14 @@ def predict_risk(
         logger.error("Failed to decode image")
         raise ValueError("Invalid image data") from exc
 
-    # ---------------- MLflow Tracking ----------------
-    with mlflow.start_run(nested=True):
-        mlflow.set_tag("service", "cnn_inference")
-        mlflow.set_tag("image_type", image_type)
-        mlflow.set_tag("model_type", model_map[image_type])
+    with _mlflow_context():
+        _safe_mlflow_call(mlflow.set_tag, "service", "cnn_inference")
+        _safe_mlflow_call(mlflow.set_tag, "image_type", image_type)
+        _safe_mlflow_call(
+            mlflow.set_tag,
+            "model_type",
+            model_map[image_type],
+        )
 
         try:
             tensor = _TRANSFORM(image).unsqueeze(0)
@@ -103,7 +154,7 @@ def predict_risk(
                 probability = torch.sigmoid(logits).item()
 
         except Exception as exc:
-            mlflow.set_tag("status", "failed")
+            _safe_mlflow_call(mlflow.set_tag, "status", "failed")
             logger.exception("CNN inference failed")
             raise RuntimeError("Model inference failed") from exc
 
@@ -115,11 +166,10 @@ def predict_risk(
 
         latency = time.time() - start_time
 
-        # -------- MLflow logs (SAFE) --------
-        mlflow.log_metric("confidence", probability)
-        mlflow.log_metric("latency_sec", latency)
-        mlflow.set_tag("risk", risk)
-        mlflow.set_tag("status", "success")
+        _safe_mlflow_call(mlflow.log_metric, "confidence", probability)
+        _safe_mlflow_call(mlflow.log_metric, "latency_sec", latency)
+        _safe_mlflow_call(mlflow.set_tag, "risk", risk)
+        _safe_mlflow_call(mlflow.set_tag, "status", "success")
 
     logger.info(
         "CNN inference completed",
