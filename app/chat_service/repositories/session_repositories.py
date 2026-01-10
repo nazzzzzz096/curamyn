@@ -46,6 +46,16 @@ def store_session_summary(
                 "created_at": datetime.utcnow(),
             }
         )
+        collection = get_collection("session_summaries")
+
+        logger.info(
+         "Mongo target info",
+          extra={
+        "db_name": collection.database.name,
+        "collection_name": collection.name,
+        },
+       )
+
 
     except PyMongoError as exc:
         logger.error(
@@ -106,3 +116,52 @@ def delete_user_sessions(user_id: str) -> int:
         #  Safe fallback (CI + prod)
         return 0
 
+def get_user_sessions_by_session_id(user_id: str, session_id: str) -> list:
+    """
+    Load live chat messages for a session (used on refresh).
+    """
+    try:
+        collection = get_collection("chat_sessions")
+
+        doc = collection.find_one(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+            },
+            {"_id": 0, "messages": 1},
+        )
+
+        if not doc:
+            return []
+
+        return doc.get("messages", [])
+
+    except PyMongoError as exc:
+        logger.error(
+            "Failed to fetch chat session",
+            extra={
+                "user_id": user_id,
+                "session_id": session_id,
+                "error": str(exc),
+            },
+        )
+        return []
+def append_chat_message(user_id: str, session_id: str, message: dict):
+    collection = get_collection("chat_sessions")
+
+    collection.update_one(
+        {
+            "user_id": user_id,
+            "session_id": session_id,
+        },
+        {
+            "$push": {"messages": message},
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+        upsert=True,
+    )
+def delete_chat_session(user_id: str, session_id: str):
+    collection = get_collection("chat_sessions")
+    collection.delete_one(
+        {"user_id": user_id, "session_id": session_id}
+    )

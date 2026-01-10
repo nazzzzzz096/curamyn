@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Auth / Security
     # --------------------
     JWT_SECRET: str
-
+    STORAGE_SECRET: str
     # --------------------
     # LLM
     # --------------------
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # S3
     # --------------------
     S3_BUCKET_NAME: str
-
+    
     # --------------------
     # CNN settings
     # --------------------

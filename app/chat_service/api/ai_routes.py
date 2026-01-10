@@ -7,7 +7,7 @@ a unified orchestration pipeline.
 
 import uuid
 from typing import Optional
-
+from base64 import b64encode
 from fastapi import (
     APIRouter,
     Depends,
@@ -16,6 +16,10 @@ from fastapi import (
     HTTPException,
     UploadFile,
     status,
+)
+from datetime import datetime,timezone
+from app.chat_service.repositories.session_repositories import (
+    append_chat_message,
 )
 
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
@@ -124,6 +128,44 @@ async def ai_interact(
     try:
         audio_bytes = await audio.read() if audio else None
         image_bytes = await image.read() if image else None
+        if input_type == "text" and text:
+            append_chat_message(
+                user_id=user_id,
+                session_id=session_id,
+                message={
+                    "author": "You",
+                    "text": text,
+                    "sent": True,
+                    "type": "text",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+           },
+        )
+        if input_type == "image" and image_bytes:
+            encoded = b64encode(image_bytes).decode()
+            mime_type = image.content_type or "image/png"
+
+            append_chat_message(
+                user_id=user_id,
+                session_id=session_id,
+                message={
+                    "author": "You",
+                    "type": "image",
+                    "data": f"data:{mime_type};base64,{encoded}",
+                    "sent": True,
+                    "created_at": datetime.utcnow().isoformat(),
+            },
+        )
+        if input_type == "audio" and audio_bytes:
+            append_chat_message(
+                user_id=user_id,
+                session_id=session_id,
+                message={
+                    "author": "You",
+                    "type": "audio",
+                    "sent": True,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
         result = run_interaction(
             input_type=input_type,
@@ -135,6 +177,20 @@ async def ai_interact(
             image_type=image_type,
             response_mode=response_mode,
         )
+        response_text = result.get("response_text") or result.get("message")
+
+        if response_text:
+            append_chat_message(
+            user_id=user_id,
+            session_id=session_id,
+            message={
+            "author": "Curamyn",
+            "text": response_text,
+            "sent": False,
+            "type": "text",
+            "created_at": datetime.utcnow().isoformat(),
+            },
+         )
 
         result["session_id"] = session_id
 

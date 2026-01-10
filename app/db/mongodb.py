@@ -6,7 +6,7 @@ Provides a centralized MongoDB client and collection accessor.
 
 import os
 from typing import Any
-
+import certifi
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -28,7 +28,7 @@ if not MONGO_URI:
 
 try:
     logger.info("Initializing MongoDB client")
-    _client = MongoClient(MONGO_URI)
+    _client = MongoClient(MONGO_URI,tls=True,tlsCAFile=certifi.where(),)
     _database = _client[MONGO_DB]
     logger.info(
         "MongoDB connection established",

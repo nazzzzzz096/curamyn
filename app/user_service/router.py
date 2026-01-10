@@ -4,11 +4,11 @@ Authentication API routes.
 Handles user signup and login workflows.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status,Query
 from fastapi import Depends
 from app.core.dependencies import get_current_user
 from app.chat_service.services.orchestrator.session_lifecycle import end_session
-
+from app.user_service.service import authenticate_user, create_user
 from app.core.security import create_access_token
 from app.chat_service.utils.logger import get_logger
 from app.user_service.schemas import (
@@ -17,13 +17,11 @@ from app.user_service.schemas import (
     UserSignup,
     UserResponse,
 )
-from app.user_service.service import authenticate_user, create_user
+from typing import Optional
 import uuid
-
-logger = get_logger(__name__)
-
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+logger = get_logger(__name__)
 
 @router.post(
     "/signup",
@@ -86,13 +84,13 @@ def login(payload: UserLogin) -> TokenResponse:
 
         user = authenticate_user(payload.email, payload.password)
 
-        session_id = str(uuid.uuid4())  # 🔑 START SESSION
+        session_id = str(uuid.uuid4())  #  START SESSION
 
         access_token = create_access_token(
             {
                 "sub": user["user_id"],
                 "email": user["email"],
-                "session_id": session_id,  # optional but useful
+                "session_id": session_id,  
             }
         )
 
@@ -111,31 +109,58 @@ def login(payload: UserLogin) -> TokenResponse:
         ...
 
 
+
 @router.post(
     "/logout",
     status_code=status.HTTP_200_OK,
 )
 def logout(
-    session_id: str,
+    session_id: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Logout user and end session.
+    Logout user and finalize AI session.
 
-    Ends in-memory session, summarizes memory (if consented),
-    and deletes full session memory.
+    - Triggers session summarization if memory consent is enabled
+    - Clears in-memory session state
     """
-    end_session(
-        session_id=session_id,
-        user_id=current_user["sub"],
-    )
+
+    if session_id:
+        try:
+            end_session(
+                session_id=session_id,
+                user_id=current_user["sub"],
+            )
+        except Exception as exc:
+            logger.exception(
+                "Session termination failed",
+                extra={
+                    "user_id": current_user["sub"],
+                    "session_id": session_id,
+                    "error": str(exc),
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to finalize session",
+            )
+    else:
+        
+        logger.info(
+            "Logout without active session",
+            extra={"user_id": current_user["sub"]},
+        )
 
     logger.info(
-        "User logged out",
+        "User logged out successfully",
         extra={
             "user_id": current_user["sub"],
             "session_id": session_id,
         },
     )
 
-    return {"message": "Logged out successfully"}
+    return {
+        "message": "Logged out successfully",
+        "session_id": session_id,
+    }
+

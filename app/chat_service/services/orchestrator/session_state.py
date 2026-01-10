@@ -6,6 +6,7 @@ NOTE: This is ephemeral and resets on application restart.
 """
 
 import time
+from datetime import datetime,timezone
 from typing import Dict, List, Optional
 
 from app.chat_service.utils.logger import get_logger
@@ -34,10 +35,11 @@ class SessionState:
         self.severities: List[str] = []
         self.emotions: List[str] = []
         self.sentiments: List[str] = []
-
+        self.started_at= datetime.now(timezone.utc)
         # Image-related context
         self.last_image_analysis: Optional[dict] = None
-
+        self.recent_topics: list[str] = []
+        self.last_user_question: str | None = None
         # Activity tracking
         self.last_activity: float = time.time()
 

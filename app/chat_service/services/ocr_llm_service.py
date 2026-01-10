@@ -15,23 +15,8 @@ from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
 load_dotenv()
-
+client = None
 MODEL_NAME = "models/gemini-flash-latest"
-
-# --------------------------------------------------
-# Test-safe dummy client (for patching & imports)
-# --------------------------------------------------
-class _NullGeminiClient:
-    """Null object for Gemini client (safe fallback)."""
-
-    class models:
-        @staticmethod
-        def generate_content(*args, **kwargs):
-            return None
-
-def _load_gemini():
-    if os.getenv("ENV") == "test":
-        return _NullGeminiClient(), None
 
 
 
@@ -46,7 +31,7 @@ def _load_gemini():
         return None, None
 
     try:
-        from google import generativeai as genai
+        from google import  genai
         from google.generativeai.types import GenerationConfig
 
         api_key = os.getenv("GEMINI_API_KEY")
@@ -81,14 +66,13 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             "This document does not appear to be a medical laboratory report."
         )
 
-    global client
+    active_client, GenerationConfig = (
+    (client, None) if client is not None else _load_gemini()
+)
 
-    # Respect patched client in tests
-    if client is not None:
-        active_client = client
-        GenerationConfig = None
-    else:
-        active_client, GenerationConfig = _load_gemini()
+    if active_client is None:
+        return _fallback_text_response()
+
 
     if active_client is None:
         return _fallback_text_response()

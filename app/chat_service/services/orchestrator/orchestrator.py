@@ -161,14 +161,24 @@ def run_interaction(
         elif input_type == "text" and state.last_image_analysis:
             llm_result = analyze_health_text(
                 text=(
-                    "The user previously saw a medical image result:\n"
-                    f"{state.last_image_analysis}\n\n"
-                    f"User question:\n{normalized_text}\n\n"
-                    "Explain calmly. Provide self-care tips if helpful. "
-                    "Do NOT diagnose."
-                ),
-                user_id=user_id,
-            )
+                    "Context: The user previously uploaded a medical report.\n"
+                    f"Report analysis:\n{state.last_image_analysis}\n\n"
+                    f"User follow-up question:\n{normalized_text}\n\n"
+                    "Respond with continuity. Do NOT ask what report again."
+        ),
+        user_id=user_id,
+    )
+
+            state.update_from_llm(llm_result)
+            state.save()
+
+            return build_response(
+            llm_result=llm_result,
+            context=context,
+            response_mode=response_mode,
+            consent=consent,
+    )
+
 
         # ---------------- TEXT ROUTING (FIXED ORDER) ----------------
 

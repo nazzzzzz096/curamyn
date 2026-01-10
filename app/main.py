@@ -9,6 +9,7 @@ from app.consent_service.router import router as consent_router
 from app.question_service.router import router as question_router
 from app.user_service.router import router as user_router
 from app.chat_service.api.memory_routes import router as memory_router
+from app.chat_service.api.chat_history_router import router as chat_history_router
 
 app = FastAPI(
     title="Curamyn",
@@ -21,6 +22,7 @@ app.include_router(consent_router)
 app.include_router(question_router)
 app.include_router(ai_router)
 app.include_router(memory_router)
+app.include_router(chat_history_router)
 
 @app.get("/health")
 def health_check() -> dict:
