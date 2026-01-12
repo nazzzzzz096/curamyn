@@ -8,18 +8,23 @@ from nicegui import ui
 
 from frontend.api.auth_client import signup_user
 from frontend.state.app_state import state
+from app.chat_service.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def show_signup_page() -> None:
     """
-    Render signup page at the center with dark theme.
+    Render the signup page with a centered dark-themed form.
     """
+    ui.dark_mode().enable()
 
     with ui.column().classes(
         "w-screen h-screen items-center justify-center bg-[#0f172a]"
     ):
         with ui.card().classes(
-            "w-[380px] bg-[#111827] text-white shadow-xl rounded-2xl p-6"
+            "w-[380px] bg-[#111827] text-white "
+            "shadow-xl rounded-2xl p-6"
         ):
 
             # -------- TITLE --------
@@ -28,27 +33,37 @@ def show_signup_page() -> None:
             )
 
             # -------- INPUTS --------
-            email = ui.input(
-                label="Email",
-                placeholder="you@example.com",
-            ).props("outlined dense dark").classes("w-full")
+            email = (
+                ui.input(
+                    label="Email",
+                    placeholder="you@example.com",
+                )
+                .props("outlined dense dark")
+                .classes("w-full")
+            )
 
-            password = ui.input(
-                label="Password",
-                placeholder="••••••••",
-                password=True,
-                password_toggle_button=True,
-            ).props("outlined dense dark").classes("w-full mt-3")
+            password = (
+                ui.input(
+                    label="Password",
+                    placeholder="••••••••",
+                    password=True,
+                    password_toggle_button=True,
+                )
+                .props("outlined dense dark")
+                .classes("w-full mt-3")
+            )
 
             # -------- SIGNUP BUTTON --------
-            ui.button(
+            signup_btn = ui.button(
                 "Sign up",
                 on_click=lambda: _handle_signup(
                     email.value,
                     password.value,
+                    signup_btn,
                 ),
             ).classes(
-                "w-full mt-5 bg-emerald-600 hover:bg-emerald-500 "
+                "w-full mt-5 bg-emerald-600 "
+                "hover:bg-emerald-500 "
                 "text-white font-semibold rounded-lg"
             )
 
@@ -62,21 +77,59 @@ def show_signup_page() -> None:
             ui.button(
                 "Login",
                 on_click=lambda: ui.navigate.to("/login"),
-            ).props("flat").classes("w-full text-emerald-400")
+            ).props("flat").classes(
+                "w-full text-emerald-400"
+            )
 
 
-def _handle_signup(email: str, password: str) -> None:
+def _handle_signup(
+    email: str,
+    password: str,
+    button,
+) -> None:
     """
-    Create user account and redirect to onboarding.
+    Create a new user account and redirect to login.
+
+    Args:
+        email: User email.
+        password: User password.
+        button: Signup button (disabled during request).
     """
+    if not email or not password:
+        ui.notify(
+            "Please enter both email and password",
+            type="warning",
+        )
+        return
+
+    logger.info(
+        "Signup attempt initiated",
+        extra={"email": email},
+    )
+
+    button.disable()
+
     try:
-        signup_user(email=email, password=password)
+        signup_user(
+            email=email,
+            password=password,
+        )
 
-        ui.notify("Account created successfully!", type="positive")
+        logger.info("Signup successful")
+
+        ui.notify(
+            "Account created successfully!",
+            type="positive",
+        )
         ui.navigate.to("/login")
 
-    except Exception as exc:
+    except Exception:
+        logger.exception("Signup failed")
+
         ui.notify(
-            f"Signup failed: {exc}",
+            "Signup failed. Please try again.",
             type="negative",
         )
+
+    finally:
+        button.enable()

@@ -10,7 +10,8 @@ app.dependency_overrides[get_current_user] = override_get_current_user
 client = TestClient(app)
 
 def test_ai_interact_endpoint():
-    response = client.post("/ai/interact", data={
+    response = client.post("http://localhost:8000/ai/interact",
+                            data={
         "input_type": "text",
         "text": "Hi"
     })

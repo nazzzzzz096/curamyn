@@ -3,7 +3,7 @@ Authentication API routes.
 
 Handles user signup and login workflows.
 """
-
+from app.chat_service.services.session_summary_service import generate_session_summary
 from fastapi import APIRouter, HTTPException, status,Query
 from fastapi import Depends
 from app.core.dependencies import get_current_user
@@ -17,6 +17,7 @@ from app.user_service.schemas import (
     UserSignup,
     UserResponse,
 )
+from app.chat_service.repositories.session_repositories import store_session_summary,get_user_sessions_by_session_id,delete_chat_session
 from typing import Optional
 import uuid
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -109,7 +110,6 @@ def login(payload: UserLogin) -> TokenResponse:
         ...
 
 
-
 @router.post(
     "/logout",
     status_code=status.HTTP_200_OK,
@@ -121,46 +121,91 @@ def logout(
     """
     Logout user and finalize AI session.
 
-    - Triggers session summarization if memory consent is enabled
-    - Clears in-memory session state
+    Flow:
+    1. Load live session messages
+    2. Generate privacy-safe summary
+    3. Persist summary
+    4. Delete live session memory
     """
 
-    if session_id:
-        try:
-            end_session(
-                session_id=session_id,
-                user_id=current_user["sub"],
-            )
-        except Exception as exc:
-            logger.exception(
-                "Session termination failed",
-                extra={
-                    "user_id": current_user["sub"],
-                    "session_id": session_id,
-                    "error": str(exc),
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to finalize session",
-            )
-    else:
-        
+    user_id = current_user["sub"]
+
+    if not session_id:
         logger.info(
             "Logout without active session",
-            extra={"user_id": current_user["sub"]},
+            extra={"user_id": user_id},
+        )
+        return {"message": "Logged out successfully"}
+
+    try:
+        # --------------------------------------------------
+        # STEP 1: LOAD LIVE SESSION (BEFORE DELETION)
+        # --------------------------------------------------
+        messages = get_user_sessions_by_session_id(
+            user_id=user_id,
+            session_id=session_id,
         )
 
-    logger.info(
-        "User logged out successfully",
-        extra={
-            "user_id": current_user["sub"],
-            "session_id": session_id,
-        },
-    )
+        if messages:
+            logger.info(
+                "Generating session summary",
+                extra={
+                    "session_id": session_id,
+                    "message_count": len(messages),
+                },
+            )
+
+            # Adapt your message list to summary format
+            session_state = {
+                "intents": [m.get("intent") for m in messages if m.get("intent")],
+                "emotions": [m.get("emotion") for m in messages if m.get("emotion")],
+                "sentiments": [
+                    m.get("sentiment") for m in messages if m.get("sentiment")
+                ],
+            }
+
+            summary = generate_session_summary(session_state)
+
+            store_session_summary(
+                session_id=session_id,
+                user_id=user_id,
+                summary=summary,
+            )
+
+        else:
+            logger.info(
+                "No live messages found, skipping summary",
+                extra={"session_id": session_id},
+            )
+
+        # --------------------------------------------------
+        # STEP 2: DELETE LIVE SESSION MEMORY
+        # --------------------------------------------------
+        delete_chat_session(
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        logger.info(
+            "Session finalized successfully",
+            extra={"session_id": session_id},
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Session termination failed",
+            extra={
+                "user_id": user_id,
+                "session_id": session_id,
+                "error": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to finalize session",
+        )
 
     return {
         "message": "Logged out successfully",
         "session_id": session_id,
     }
-

@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("JWT_SECRET")
+SECRET_KEY = os.getenv("CURAMYN_JWT_SECRET")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

@@ -8,13 +8,15 @@ from nicegui import ui
 
 from frontend.api.auth_client import login_user
 from frontend.state.app_state import state
+from app.chat_service.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def show_login_page() -> None:
     """
-    Render login page at the center with dark theme.
+    Render the login page with a centered dark-themed form.
     """
-
     ui.dark_mode().enable()
 
     # -------- PAGE CONTAINER --------
@@ -56,11 +58,12 @@ def show_login_page() -> None:
             )
 
             # -------- LOGIN BUTTON --------
-            ui.button(
+            login_btn = ui.button(
                 "Login",
                 on_click=lambda: _handle_login(
                     email.value,
                     password.value,
+                    login_btn,
                 ),
             ).classes(
                 "w-full mt-5 bg-emerald-600 "
@@ -82,10 +85,33 @@ def show_login_page() -> None:
             )
 
 
-def _handle_login(email: str, password: str) -> None:
+def _handle_login(
+    email: str,
+    password: str,
+    button,
+) -> None:
     """
-    Authenticate user and move to onboarding.
+    Authenticate the user and navigate to onboarding.
+
+    Args:
+        email: User email.
+        password: User password.
+        button: Login button (used to disable during request).
     """
+    if not email or not password:
+        ui.notify(
+            "Please enter both email and password",
+            type="warning",
+        )
+        return
+
+    logger.info(
+        "Login attempt initiated",
+        extra={"email": email},
+    )
+
+    button.disable()
+
     try:
         token_data = login_user(
             email=email,
@@ -95,11 +121,20 @@ def _handle_login(email: str, password: str) -> None:
         state.token = token_data["access_token"]
         state.user_id = token_data.get("user_id")
 
-        ui.notify("Login successful", type="positive")
+        logger.info("Login successful")
+        ui.notify(
+            "Login successful",
+            type="positive",
+        )
         ui.navigate.to("/onboarding")
 
-    except Exception as exc:
+    except Exception:
+        logger.exception("Login failed")
+
         ui.notify(
-            f"Login failed: {exc}",
+            "Invalid email or password",
             type="negative",
         )
+
+    finally:
+        button.enable()

@@ -1,12 +1,24 @@
-from nicegui import ui
-import asyncio
+"""
+Main chat page for Curamyn frontend.
 
+Handles UI layout, chat interactions, audio recording,
+file uploads, consent management, memory actions, and logout.
+"""
+
+from nicegui import ui,app
+import asyncio
+        
+import json
 from frontend.state.app_state import state
 from frontend.api.upload_client import send_ai_interaction
 from frontend.api.consent_client import update_consent
 from frontend.api.memory_client import delete_memory
 from frontend.api.auth_client import logout_user
 from frontend.api.chat_history_client import fetch_chat_history
+from app.chat_service.utils.logger import get_logger
+from frontend.api.chat_summary_client import save_chat_summary
+from frontend.api.chat_history_client import end_chat_session
+logger = get_logger(__name__)
 
 # =================================================
 # GLOBAL STATE (NO UI OBJECTS)
@@ -25,6 +37,9 @@ DELETE_DIALOG = None
 # MAIN PAGE
 # =================================================
 def show_chat_page():
+    """
+    Render the main chat page and restore chat history on refresh.
+    """
     global CHAT_CONTAINER, CONSENT_MENU, DELETE_DIALOG
 
     ui.dark_mode().enable()
@@ -34,7 +49,7 @@ def show_chat_page():
     with DELETE_DIALOG:
         ui.label("Delete memory?")
         with ui.row().classes("gap-4"):
-            ui.button("Cancel", on_click=lambda: DELETE_DIALOG.close())
+            ui.button("Cancel", on_click=DELETE_DIALOG.close)
             ui.button("Delete", on_click=_handle_confirm_delete)
 
     # ================= PAGE LAYOUT =================
@@ -45,6 +60,7 @@ def show_chat_page():
             "w-full px-6 py-3 bg-[#0b1220] justify-between items-center shrink-0"
         ):
             ui.label("Curamyn").classes("text-xl font-bold text-white")
+
             with ui.row().classes("gap-3"):
                 CONSENT_MENU = _render_consent_menu()
                 ui.button("DELETE MEMORY", on_click=_open_delete_dialog)
@@ -58,7 +74,7 @@ def show_chat_page():
                 "w-full max-w-6xl mx-auto px-6 py-6 gap-3"
             )
 
-            # ✅ LOAD CHAT HISTORY FROM BACKEND
+            #  CRITICAL: LOAD HISTORY SYNCHRONOUSLY
             if state.token and state.session_id:
                 try:
                     messages = fetch_chat_history(
@@ -68,8 +84,8 @@ def show_chat_page():
 
                     if messages:
                         state.messages = messages
-                        for m in messages:
-                            _render_message(m)
+                        for msg in messages:
+                            _render_message(msg)
                     else:
                         _add_ai("Hi 👋 How can I help you today?")
 
@@ -78,61 +94,199 @@ def show_chat_page():
                     _add_ai("Hi 👋 How can I help you today?")
             else:
                 _add_ai("Hi 👋 How can I help you today?")
+        ui.add_head_html("""
+<script>
+window.addEventListener('load', () => {
+    const sessionId = sessionStorage.getItem('session_id');
+    if (sessionId) {
+        fetch('/_nicegui_internal/restore_session', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sessionId })
+        });
+    }
+});
+</script>
+""")
 
         # ---------- INPUT BAR ----------
         _render_input_bar()
 
+
+# =================================================
+# INTERNAL ENDPOINTS
+# =================================================
+
+
+
+
+
+@app.post("/_nicegui_internal/add_ai")
+async def add_ai(payload: dict) -> dict:
+    text = payload.get("text")
+    if text and CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            _add_ai(text)
+    return {"ok": True}
+
+
+
+
+# =================================================
+# SESSION-ID STORAGE (CRITICAL)
+# =================================================
+def _persist_session_id(session_id: str | None) -> None:
+    if session_id:
+        ui.run_javascript(
+            f"sessionStorage.setItem('session_id', '{session_id}')"
+        )
+
+
 # =================================================
 # DELETE MEMORY
 # =================================================
-def _open_delete_dialog():
+
+def _open_delete_dialog() -> None:
+    """
+    Open the delete-memory confirmation dialog.
+    """
     if DELETE_DIALOG:
         DELETE_DIALOG.open()
 
-def _handle_confirm_delete():
+
+def _handle_confirm_delete() -> None:
+    """
+    Handle user confirmation for memory deletion.
+    """
     if DELETE_DIALOG:
         DELETE_DIALOG.close()
+
     _do_delete()
 
-def _do_delete():
-    async def task():
+
+def _do_delete() -> None:
+    """
+    Execute memory deletion asynchronously.
+
+    This clears:
+    - backend memory
+    - frontend state
+    - browser session storage
+    """
+    async def task() -> None:
+        logger.info("User initiated memory deletion")
+
         try:
             await asyncio.to_thread(delete_memory)
+
             state.messages.clear()
             state.session_id = None
-            CHAT_CONTAINER.clear()
+
+            if CHAT_CONTAINER:
+                CHAT_CONTAINER.clear()
+
             _clear_browser_chat()
             _add_ai("🧹 Memory cleared. How can I help you now?")
-            ui.notify("Memory deleted successfully", type="positive")
-        except Exception as e:
-            ui.notify(str(e), type="negative")
+
+            logger.info("Memory deleted successfully")
+            ui.notify(
+                "Memory deleted successfully",
+                type="positive",
+            )
+
+        except Exception:
+            logger.exception("Memory deletion failed")
+
+            ui.notify(
+                "Failed to delete memory. Please try again.",
+                type="negative",
+            )
 
     asyncio.create_task(task())
+
 
 # =================================================
 # CONSENT MENU
 # =================================================
 def _render_consent_menu():
+    """
+    Render the consent preferences menu.
+
+    Allows the user to enable or disable permissions for:
+    - memory
+    - images
+    - documents
+    - voice
+    """
     with ui.menu() as menu:
         ui.label("Consent Preferences").classes("font-semibold")
 
-        mem = ui.checkbox("Allow memory", value=state.consent["memory"])
-        img = ui.checkbox("Allow images", value=state.consent["image"])
-        doc = ui.checkbox("Allow documents", value=state.consent["document"])
+        mem = ui.checkbox(
+            "Allow memory",
+            value=state.consent["memory"],
+        )
+        img = ui.checkbox(
+            "Allow images",
+            value=state.consent["image"],
+        )
+        doc = ui.checkbox(
+            "Allow documents",
+            value=state.consent["document"],
+        )
+        voice = ui.checkbox(
+            "Allow voice",
+            value=state.consent.get("voice", False),
+        )
 
-        def save():
-            new = {
+        def save() -> None:
+            """
+            Save updated consent preferences to backend.
+            """
+            if not state.token:
+                ui.notify(
+                    "You are not authenticated.",
+                    type="negative",
+                )
+                return
+
+            new_consent = {
                 "memory": mem.value,
                 "image": img.value,
                 "document": doc.value,
-                "voice": state.consent.get("voice", False),
+                "voice": voice.value,
             }
-            update_consent(state.token, new)
-            state.consent = new
-            ui.notify("Consent updated", type="positive")
-            menu.close()
 
-        ui.button("SAVE", on_click=save)
+            logger.info(
+                "Updating user consent",
+                extra={"consent": new_consent},
+            )
+
+            try:
+                update_consent(
+                    token=state.token,
+                    consent_data=new_consent,
+                )
+
+                state.consent = new_consent
+                ui.notify(
+                    "Consent updated",
+                    type="positive",
+                )
+                menu.close()
+
+            except Exception:
+                logger.exception(
+                    "Failed to update user consent"
+                )
+                ui.notify(
+                    "Failed to update consent. Please try again.",
+                    type="negative",
+                )
+
+        ui.button(
+            "SAVE",
+            on_click=save,
+        )
 
     btn = ui.button("CONSENT")
     btn.on_click(menu.open)
@@ -141,273 +295,653 @@ def _render_consent_menu():
 # =================================================
 # INPUT BAR
 # =================================================
-def _render_input_bar():
+def _render_input_bar() -> None:
+    """
+    Render the chat input bar.
+
+    This includes:
+    - Input type selection (text, image, document)
+    - File upload widget
+    - Text input
+    - Audio record / stop controls
+
+    Modifies global UI reference:
+        - UPLOAD_WIDGET
+    """
     global UPLOAD_WIDGET
+
+    logger.debug("Rendering chat input bar")
 
     with ui.element("div").classes(
         "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
     ):
-        with ui.row().classes("max-w-4xl mx-auto items-center gap-2"):
+        with ui.row().classes(
+            "max-w-4xl mx-auto items-center gap-2"
+        ):
 
+            # ---------- INPUT TYPE MENU ----------
             with ui.menu() as type_menu:
-                ui.menu_item("Text", on_click=_set_text_mode)
-                ui.menu_item("X-ray", on_click=lambda: _set_image_mode("xray"))
-                ui.menu_item("Skin", on_click=lambda: _set_image_mode("skin"))
-                ui.menu_item("Document", on_click=_set_document_mode)
+                ui.menu_item(
+                    "Text",
+                    on_click=_set_text_mode,
+                )
+                ui.menu_item(
+                    "X-ray",
+                    on_click=lambda: _set_image_mode("xray"),
+                )
+                ui.menu_item(
+                    "Skin",
+                    on_click=lambda: _set_image_mode("skin"),
+                )
+                ui.menu_item(
+                    "Document",
+                    on_click=_set_document_mode,
+                )
 
-            ui.button("+ TYPE", on_click=type_menu.open)
+            ui.button(
+                "+ TYPE",
+                on_click=type_menu.open,
+            )
 
+            # ---------- FILE UPLOAD ----------
             UPLOAD_WIDGET = ui.upload(
                 auto_upload=True,
                 on_upload=_on_file_selected,
             ).props("accept=*/*")
 
-            input_box = ui.input("Message Curamyn...").classes("flex-1")
-            ui.button("➤", on_click=lambda: _send(input_box))
-            ui.menu_item("Voice", on_click=_set_audio_mode)
-            record_btn = ui.button("🎤 Record", on_click=_start_recording)
-            stop_btn = ui.button("🛑 Stop", on_click=_stop_recording)
+            # ---------- TEXT INPUT ----------
+            input_box = ui.input(
+                "Message Curamyn..."
+            ).classes("flex-1")
+
+            ui.button(
+                "➤",
+                on_click=lambda: _send(input_box),
+            )
+
+            # ---------- AUDIO CONTROLS ----------
+            ui.button(
+                "🎤 Record",
+                on_click=_start_recording,
+            )
+            ui.button(
+                "🛑 Stop",
+                on_click=_stop_recording,
+            )
 
 
-def _start_recording():
-    ui.run_javascript("""
-    window.audioChunks = [];
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
-        window.mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-        mediaRecorder.start();
-      });
-    """)
+def _start_recording() -> None:
+    """
+    Start audio recording using the browser MediaRecorder API.
 
+    This function:
+    - Requests microphone permission
+    - Initializes MediaRecorder
+    - Buffers audio chunks in the browser
+    """
+    logger.info("User started audio recording")
 
-def _stop_recording():
-    ui.run_javascript("""
-    mediaRecorder.stop();
-    mediaRecorder.onstop = async () => {
-        const blob = new Blob(audioChunks, { type: 'audio/webm' });
-        const arrayBuffer = await blob.arrayBuffer();
-        window.voiceData = Array.from(new Uint8Array(arrayBuffer));
-    };
-    """)
+    ui.notify("🎙️ Recording...", type="warning")
 
-async def _send_audio():
-    if not hasattr(ui.context.client, "voiceData"):
-        ui.notify("No audio captured", type="warning")
-        return
+    ui.run_javascript(
+        """
+        // Unlock audio playback using user gesture (required by browsers)
+        if (!window._unlockedAudio) {
+            window._unlockedAudio = new Audio();
+            window._unlockedAudio.muted = true;
+            window._unlockedAudio.play().catch(() => {});
+        }
 
-    audio_bytes = bytes(ui.context.client.voiceData)
+        window._audioChunks = [];
 
-    response = await asyncio.to_thread(
-        send_ai_interaction,
-        token=state.token,
-        session_id=state.session_id,
-        input_type="audio",
-        response_mode="voice",
-        audio_bytes=audio_bytes,
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                window._mediaRecorder = new MediaRecorder(stream);
+                window._mediaRecorder.ondataavailable = e => {
+                    if (e.data.size > 0) {
+                        window._audioChunks.push(e.data);
+                    }
+                };
+                window._mediaRecorder.start();
+            })
+            .catch(err => {
+                console.error('Microphone access denied', err);
+                fetch('/_nicegui_internal/notify_error', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        message: 'Microphone access denied.'
+                    })
+                });
+            });
+        """
     )
 
-    state.session_id = response.get("session_id", state.session_id)
 
-    audio_base64 = response.get("audio")
-    if audio_base64:
-        _play_audio(audio_base64)
+def _stop_recording() -> None:
+    """
+    Stop audio recording and send the captured audio
+    to the backend for processing.
+    """
+    logger.info("User stopped audio recording")
+
+    ui.notify("Recording stopped", type="info")
+
+    ui.run_javascript(
+        """
+        if (!window._mediaRecorder) return;
+
+        window._mediaRecorder.stop();
+
+        window._mediaRecorder.onstop = async () => {
+            const blob = new Blob(
+                window._audioChunks,
+                { type: 'audio/webm' }
+            );
+
+            const arrayBuffer = await blob.arrayBuffer();
+            const bytes = Array.from(new Uint8Array(arrayBuffer));
+
+            const res = await fetch('/_nicegui_api/send_voice', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(bytes),
+            });
+
+            const data = await res.json();
+
+            // Display text immediately
+            if (data.message) {
+                window.dispatchEvent(
+                    new CustomEvent(
+                        'ai-text',
+                        { detail: data.message }
+                    )
+                );
+            }
+
+            // Play audio response immediately
+            if (data.audio_base64) {
+                const audio = new Audio(
+                    'data:audio/wav;base64,' +
+                    data.audio_base64
+                );
+                audio.play();
+            }
+        };
+        """
+    )
+
+
+@app.post('/_nicegui_api/send_voice')
+async def send_voice(audio_array: list[int]) -> dict:
+    """
+    Receive recorded audio from the browser and send it to the AI backend.
+
+    Args:
+        audio_array: List of audio byte values from the browser.
+
+    Returns:
+        Backend AI response payload.
+    """
+    logger.info("Received voice input from browser")
+
+    if not state.token:
+        logger.warning("Voice input received without authentication")
+        return {"error": "Not authenticated"}
+
+    audio_bytes = bytes(audio_array)
+
+    try:
+        result = await asyncio.to_thread(
+            send_ai_interaction,
+            token=state.token,
+            session_id=state.session_id,
+            input_type="audio",
+            response_mode="voice",
+            audio_bytes=audio_bytes,
+        )
+
+        state.session_id = result.get(
+            "session_id",
+            state.session_id,
+        )
+
+        logger.info("Voice interaction processed successfully")
+        return result
+
+    except Exception:
+        logger.exception("Voice interaction failed")
+        return {
+            "error": "Failed to process voice input",
+        }
+
 
 # =================================================
 # MODE
 # =================================================
-def _set_audio_mode():
-    global CURRENT_MODE
-    CURRENT_MODE = "audio"
 
-def _set_text_mode():
+def _set_text_mode() -> None:
+    """
+    Switch input mode to text.
+
+    Resets pending file state.
+    """
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, PENDING_FILE_BYTES
+
     CURRENT_MODE = "text"
     CURRENT_IMAGE_TYPE = None
     PENDING_FILE_BYTES = None
 
-def _set_image_mode(img_type):
+    logger.debug("Switched input mode to TEXT")
+
+
+def _set_image_mode(img_type: str) -> None:
+    """
+    Switch input mode to image.
+
+    Args:
+        img_type: Image type (e.g., 'skin', 'xray').
+    """
     global CURRENT_MODE, CURRENT_IMAGE_TYPE
+
     CURRENT_MODE = "image"
     CURRENT_IMAGE_TYPE = img_type
 
-def _set_document_mode():
+    logger.debug(
+        "Switched input mode to IMAGE",
+        extra={"image_type": img_type},
+    )
+
+
+def _set_document_mode() -> None:
+    """
+    Switch input mode to document upload.
+    """
     global CURRENT_MODE, CURRENT_IMAGE_TYPE
+
     CURRENT_MODE = "document"
     CURRENT_IMAGE_TYPE = "document"
+
+    logger.debug("Switched input mode to DOCUMENT")
 
 # =================================================
 # FILE UPLOAD
 # =================================================
-async def _on_file_selected(event):
+async def _on_file_selected(event) -> None:
+    """
+    Handle file selection from the upload widget.
+
+    Reads the file, renders a preview in the chat UI,
+    and stores it as a pending message.
+    """
     global PENDING_FILE_BYTES
 
-    PENDING_FILE_BYTES = await event.file.read()
+    logger.info(
+        "User selected a file",
+        extra={"uploaded_filename": event.file.name},
+    )
 
-    import base64, mimetypes
-    mime, _ = mimetypes.guess_type(event.file.name)
-    mime = mime or "image/png"
+    try:
+        PENDING_FILE_BYTES = await event.file.read()
 
-    encoded = base64.b64encode(PENDING_FILE_BYTES).decode()
-    data_url = f"data:{mime};base64,{encoded}"
+        import base64
+        import mimetypes
 
-    msg = {
-        "author": "You",
-        "sent": True,
-        "type": "image",
-        "data": data_url,
-    }
+        mime, _ = mimetypes.guess_type(event.file.name)
+        mime = mime or "image/png"
 
-    state.messages.append(msg)
+        encoded = base64.b64encode(
+            PENDING_FILE_BYTES
+        ).decode()
 
-    with CHAT_CONTAINER:
-        with ui.row().classes("w-full justify-end"):
-            ui.image(data_url).classes("max-w-xs rounded-lg border border-gray-600")
+        data_url = f"data:{mime};base64,{encoded}"
 
-    _store_message_js(msg)
-    _scroll_to_bottom()
+        msg = {
+            "author": "You",
+            "sent": True,
+            "type": "image",
+            "data": data_url,
+        }
+
+        state.messages.append(msg)
+
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                with ui.row().classes(
+                    "w-full justify-end"
+                ):
+                    ui.image(data_url).classes(
+                        "max-w-xs rounded-lg "
+                        "border border-gray-600"
+                    )
+
+        _store_message_js(msg)
+        _scroll_to_bottom()
+
+    except Exception:
+        logger.exception("Failed to handle file upload")
+        ui.notify(
+            "Failed to load selected file",
+            type="negative",
+        )
+        PENDING_FILE_BYTES = None
 
 
 # =================================================
 # SEND
 # =================================================
-async def _send(input_box):
+async def _send(input_box) -> None:
+    """
+    Send user input to the backend based on current mode.
+
+    Supports:
+    - text messages
+    - image / document uploads
+    """
     global PENDING_FILE_BYTES
+
+    logger.debug(
+        "Sending message",
+        extra={"mode": CURRENT_MODE},
+    )
 
     if CURRENT_MODE == "text":
         text = input_box.value.strip()
+
         if not text:
+            logger.debug("Empty text input ignored")
             return
+
         input_box.value = ""
         _add_user(text)
-        await _send_text(text)
+
+        try:
+            await _send_text(text)
+        except Exception:
+            logger.exception("Failed to send text message")
+            ui.notify(
+                "Failed to send message",
+                type="negative",
+            )
+
         return
 
+    # ---------- FILE MODE ----------
     if not PENDING_FILE_BYTES:
-        ui.notify("Select a file first", type="warning")
+        ui.notify(
+            "Select a file first",
+            type="warning",
+        )
         return
 
-    await _send_file()
+    try:
+        await _send_file()
+    except Exception:
+        logger.exception("Failed to send file")
+        ui.notify(
+            "Failed to send file",
+            type="negative",
+        )
 
-async def _send_text(text):
-    response = await asyncio.to_thread(
-        send_ai_interaction,
-        token=state.token,
-        session_id=state.session_id,
-        input_type="text",
-        text=text,
-    )
 
-    message = response.get("response_text") or response.get("message")
-    state.session_id = response.get("session_id", state.session_id)
+async def _send_text(text: str) -> None:
+    """
+    Send a text message to the AI backend and render the response.
 
-    _add_ai(message)
+    Args:
+        text: User input text.
+    """
+    logger.info("Sending text message")
 
-async def _send_file():
+    if not state.token:
+        logger.warning("Attempted to send text without authentication")
+        ui.notify("You are not authenticated", type="negative")
+        return
+
+    try:
+        response = await asyncio.to_thread(
+            send_ai_interaction,
+            token=state.token,
+            session_id=state.session_id,
+            input_type="text",
+            text=text,
+            response_mode="text",
+        )
+
+        state.session_id = response.get(
+            "session_id",
+            state.session_id,
+        )
+        _persist_session_id(state.session_id)
+
+        message = response.get("message")
+        if message:
+            _add_ai(message)
+
+    except Exception:
+        logger.exception("Failed to send text message")
+        ui.notify(
+            "Failed to send message. Please try again.",
+            type="negative",
+        )
+
+
+async def _send_file() -> None:
+    """
+    Send an image or document file to the AI backend
+    and render the response.
+    """
     global PENDING_FILE_BYTES
 
-    response = await asyncio.to_thread(
-        send_ai_interaction,
-        token=state.token,
-        input_type="image",
-        session_id=state.session_id,
-        image_type=CURRENT_IMAGE_TYPE,
-        file_bytes=PENDING_FILE_BYTES,
+    logger.info(
+        "Sending file to backend",
+        extra={"image_type": CURRENT_IMAGE_TYPE},
     )
 
-    text = response.get("response_text") or response.get("message")
-    disclaimer = response.get("disclaimer")
+    if not state.token:
+        logger.warning("Attempted to send file without authentication")
+        ui.notify("You are not authenticated", type="negative")
+        return
 
-    state.session_id = response.get("session_id", state.session_id)
+    try:
+        response = await asyncio.to_thread(
+            send_ai_interaction,
+            token=state.token,
+            input_type="image",
+            session_id=state.session_id,
+            image_type=CURRENT_IMAGE_TYPE,
+            file_bytes=PENDING_FILE_BYTES,
+        )
 
-    if text:
-        _add_ai(text)
-    if disclaimer:
-        _add_ai(f"⚠️ {disclaimer}")
+        state.session_id = response.get(
+            "session_id",
+            state.session_id,
+        )
+        _persist_session_id(state.session_id)
 
-    PENDING_FILE_BYTES = None
-    UPLOAD_WIDGET.reset()
+        text = response.get("response_text") or response.get("message")
+        disclaimer = response.get("disclaimer")
+
+        if text:
+            _add_ai(text)
+        if disclaimer:
+            _add_ai(f"⚠️ {disclaimer}")
+
+    except Exception:
+        logger.exception("Failed to send file")
+        ui.notify(
+            "Failed to send file. Please try again.",
+            type="negative",
+        )
+
+    finally:
+        PENDING_FILE_BYTES = None
+        if UPLOAD_WIDGET:
+            UPLOAD_WIDGET.reset()
+
 
 # =================================================
 # CHAT UI + BROWSER SESSION STORAGE
 # =================================================
-def _add_user(text):
-    msg = {"author": "You", "text": text, "sent": True}
+def _add_user(text: str) -> None:
+    """
+    Render a user message in the chat UI and store it.
+
+    Args:
+        text: User message text.
+    """
+    logger.debug("Rendering user message")
+
+    msg = {
+        "author": "You",
+        "text": text,
+        "sent": True,
+    }
     state.messages.append(msg)
 
-    with CHAT_CONTAINER:
-        bubble = ui.chat_message(
-            text=text,
-            name="You",
-            sent=True,        # ✅ RIGHT SIDE
-        )
-
-        # 🔹 Remove bubble look, keep text only
-        bubble.classes(
-            "bg-transparent text-white shadow-none"
-        )
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            bubble = ui.chat_message(
+                text=text,
+                name="You",
+                sent=True,  # right side
+            )
+            # Render as plain text (no bubble styling)
+            bubble.classes(
+                "bg-transparent text-white shadow-none"
+            )
 
     _store_message_js(msg)
     _scroll_to_bottom()
 
 
-def _add_ai(text):
-    msg = {"author": "Curamyn", "text": text, "sent": False}
+def _add_ai(text: str) -> None:
+    """
+    Render an AI message in the chat UI and store it.
+
+    Args:
+        text: AI-generated message text.
+    """
+    logger.debug("Rendering AI message")
+
+    msg = {
+        "author": "Curamyn",
+        "text": text,
+        "sent": False,
+    }
     state.messages.append(msg)
 
-    with CHAT_CONTAINER:
-        ui.chat_message(
-            text=text,
-            name="Curamyn",
-            sent=False,
-        )
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            ui.chat_message(
+                text=text,
+                name="Curamyn",
+                sent=False,
+            )
 
     _store_message_js(msg)
     _scroll_to_bottom()
 
 
-def _render_message(m):
+def _render_message(message: dict) -> None:
+    """
+    Render a previously stored chat message.
+
+    Used when restoring chat history.
+
+    Args:
+        message: Message object containing text, author, and sent flag.
+    """
+    logger.debug(
+        "Rendering stored message",
+        extra={"author": message.get("author")},
+    )
+
+    if not CHAT_CONTAINER:
+        return
+
     with CHAT_CONTAINER:
         bubble = ui.chat_message(
-            text=m.get("text", ""),
-            name=m.get("author", ""),
-            sent=m.get("sent", False),
+            text=message.get("text", ""),
+            name=message.get("author", ""),
+            sent=message.get("sent", False),
         )
 
-        if m.get("sent"):
+        if message.get("sent"):
             bubble.classes(
                 "bg-transparent text-white shadow-none"
             )
 
 
 
-        
-def _store_message_js(msg):
-    ui.run_javascript(f"""
+
+
+def _store_message_js(msg: dict) -> None:
+    """
+    Persist a chat message in browser sessionStorage.
+
+    This keeps chat history available across page refreshes
+    during the active session.
+    """
+    logger.debug(
+        "Storing message in browser sessionStorage",
+        extra={"author": msg.get("author")},
+    )
+
+    payload = json.dumps(msg)
+
+    ui.run_javascript(
+        f"""
         (function() {{
-            const existing = JSON.parse(
-                sessionStorage.getItem('chat_messages') || '[]'
-            );
+            try {{
+                const existing = JSON.parse(
+                    sessionStorage.getItem('chat_messages') || '[]'
+                );
 
-            existing.push({msg});
+                existing.push({payload});
 
-            sessionStorage.setItem(
-                'chat_messages',
-                JSON.stringify(existing)
-            );
+                sessionStorage.setItem(
+                    'chat_messages',
+                    JSON.stringify(existing)
+                );
 
-            window.chatMessages = existing;
+                window.chatMessages = existing;
+            }} catch (err) {{
+                console.error('Failed to store chat message', err);
+            }}
         }})();
-    """)
+        """
+    )
 
-def _clear_browser_chat():
-    ui.run_javascript("sessionStorage.removeItem('chat_messages');")
+
+def _clear_browser_chat() -> None:
+    """
+    Clear all stored chat messages from browser sessionStorage.
+    """
+    logger.info("Clearing browser chat history")
+
+    ui.run_javascript(
+        """
+        try {
+            sessionStorage.removeItem('chat_messages');
+        } catch (err) {
+            console.error('Failed to clear chat history', err);
+        }
+        """
+    )
+
 
 # =================================================
 # SCROLL
 # =================================================
-def _scroll_to_bottom():
-    ui.run_javascript("""
+
+def _scroll_to_bottom() -> None:
+    """
+    Smoothly scroll the chat container to the bottom.
+    """
+    ui.run_javascript(
+        """
         setTimeout(() => {
             const el = document.querySelector('.chat-scroll');
             if (el) {
@@ -417,36 +951,41 @@ def _scroll_to_bottom():
                 });
             }
         }, 50);
-    """)
+        """
+    )
+
 
 # =================================================
 # LOGOUT
 # =================================================
-def _logout():
-    if state.token and state.session_id:
-        try:
-            from frontend.api.chat_history_client import end_chat_session
-            end_chat_session(
-                token=state.token,
-                session_id=state.session_id,
-            )
-        except Exception as e:
-            print("END SESSION ERROR:", e)
+
+def _logout() -> None:
+    """
+    Logout the current user safely.
+
+    Backend responsibilities:
+    - Generate & store session summary
+    - Delete session memory
+
+    Frontend responsibilities:
+    - Call backend logout with session_id
+    - Clear UI + browser state
+    """
+ 
+    logger.info(
+        "Calling backend logout",
+        extra={"session_id": state.session_id},
+    )
+
+    logout_user(
+        token=state.token,
+        session_id=state.session_id,  
+    )
 
     _clear_browser_chat()
 
-    if CONSENT_MENU:
-        CONSENT_MENU.close()
+    state.token = None
+    state.session_id = None
+    state.messages.clear()
 
-    try:
-        if state.token and state.session_id:
-            logout_user(
-                token=state.token,
-                session_id=state.session_id,
-            )
-    finally:
-        state.token = None
-        state.session_id = None
-        state.messages.clear()
-        ui.navigate.to("/login")
-
+    ui.navigate.to("/login")

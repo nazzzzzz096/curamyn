@@ -63,7 +63,7 @@ Return JSON exactly in this schema:
         if not raw_text:
             raise ValueError("Empty LLM output")
 
-        # 🔐 Safe JSON parsing
+        #  Safe JSON parsing
         parsed = _safe_parse_json(raw_text)
 
         summary_text = parsed.get("summary_text")

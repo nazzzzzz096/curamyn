@@ -9,7 +9,7 @@ import os
 from typing import Optional
 
 # Read log level from environment (default: INFO)
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = os.getenv("CURAMYN_LOG_LEVEL", "INFO").upper()
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:

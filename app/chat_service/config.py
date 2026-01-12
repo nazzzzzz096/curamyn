@@ -4,8 +4,10 @@ Application configuration.
 Centralized environment-based settings using Pydantic v2.
 """
 
+from typing import List
+
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 
 class Settings(BaseSettings):
@@ -13,6 +15,17 @@ class Settings(BaseSettings):
     # Environment
     # --------------------
     ENV: str = "dev"
+
+    # --------------------
+    # CORS
+    # --------------------
+    ALLOWED_ORIGINS: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ],
+        description="Allowed CORS origins for frontend",
+    )
 
     # --------------------
     # Database
@@ -25,6 +38,7 @@ class Settings(BaseSettings):
     # --------------------
     JWT_SECRET: str
     STORAGE_SECRET: str
+
     # --------------------
     # LLM
     # --------------------
@@ -48,7 +62,7 @@ class Settings(BaseSettings):
     # S3
     # --------------------
     S3_BUCKET_NAME: str
-    
+
     # --------------------
     # CNN settings
     # --------------------
@@ -56,8 +70,8 @@ class Settings(BaseSettings):
 
     model_config = ConfigDict(
         env_file=".env",
-        extra="forbid" , 
-
+        env_prefix="CURAMYN_", 
+        extra="forbid",        
     )
 
 

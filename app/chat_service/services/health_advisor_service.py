@@ -25,14 +25,14 @@ def _load_gemini():
     """
     Load Gemini client safely (disabled in tests).
     """
-    if os.getenv("ENV") == "test":
+    if os.getenv("CURAMYN_ENV") == "test":
         return None, None
 
     try:
         from google import genai
         from google.genai.types import GenerateContentConfig
 
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
         if not api_key:
             return None, None
 
@@ -64,8 +64,8 @@ def analyze_health_text(
     client, GenerateContentConfig = _load_gemini()
     logger.error(
     "ENV CHECK | ENV=%s | GEMINI_API_KEY=%s",
-    os.getenv("ENV"),
-    "SET" if os.getenv("GEMINI_API_KEY") else "MISSING",
+    os.getenv("CURAMYN_ENV"),
+    "SET" if os.getenv("CURAMYN_GEMINI_API_KEY") else "MISSING",
     )
 
     # ---------------- FALLBACK MODE ----------------

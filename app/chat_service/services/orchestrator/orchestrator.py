@@ -1,29 +1,25 @@
 """
-Main orchestration pipeline.
+Main orchestration pipeline for handling user interactions.
 
-Coordinates multimodal input processing, safety checks,
-LLM routing, session state tracking, and response generation.
-
-IMPORTANT:
-- This module NEVER persists memory.
-- Session memory lives only in RAM.
-- Memory storage & cleanup are handled on session END (logout).
+This module coordinates:
+- Input routing
+- Safety checks
+- LLM invocation
+- Session state updates
+- Response building
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 from app.chat_service.services.orchestrator.input_router import route_input
 from app.chat_service.services.orchestrator.session_state import SessionState
 from app.chat_service.services.orchestrator.response_builder import build_response
 
-# LLM services
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.health_advisor_service import analyze_health_text
 from app.chat_service.services.ocr_llm_service import analyze_ocr_text
 from app.chat_service.services.intent_classifier import classify_intent_llm
 
-
-# Safety & consent
 from app.chat_service.services.safety_guard import (
     check_input_safety,
     check_output_safety,
@@ -36,7 +32,7 @@ from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_DENY_CONSENT = {
+DEFAULT_DENY_CONSENT: Dict[str, bool] = {
     "voice": False,
     "image": False,
     "document": False,
@@ -44,7 +40,7 @@ DEFAULT_DENY_CONSENT = {
 }
 
 
-def run_interaction(
+async def run_interaction(
     *,
     input_type: str,
     session_id: str,
@@ -56,41 +52,31 @@ def run_interaction(
     response_mode: str,
 ) -> Dict[str, Any]:
     """
-    Execute a single AI interaction cycle.
+    Orchestrates a single user interaction lifecycle.
 
-    Responsibilities:
-    - Consent validation
-    - Input preprocessing
-    - Safety checks
-    - LLM routing
-    - Session state updates (RAM ONLY)
-    - Response construction
+    Args:
+        input_type: Type of input (text, audio, image).
+        session_id: Active session identifier.
+        user_id: Optional user ID for consent lookup.
+        text: Raw text input.
+        audio: Audio bytes input.
+        image: Image bytes input.
+        image_type: Image subtype (e.g., document).
+        response_mode: Desired response mode (text/voice).
 
-    This function NEVER:
-    - Stores memory
-    - Calls summarization
-    - Writes to database
+    Returns:
+        A response dictionary suitable for API output.
     """
-
     logger.info(
         "Interaction started",
-        extra={
-            "session_id": session_id,
-            "input_type": input_type,
-            "user_id": user_id,
-        },
+        extra={"session_id": session_id, "input_type": input_type},
     )
 
-    # Load or create in-memory session
     state = SessionState.load(session_id)
     consent = get_user_consent(user_id) if user_id else DEFAULT_DENY_CONSENT
 
-    # ---------------- INPUT + SAFETY ----------------
     try:
-        if audio:
-            check_input_safety("audio", consent)
-        if image:
-            check_input_safety("image", consent)
+        _validate_input_safety(audio=audio, image=image, consent=consent)
 
         normalized_text, context = route_input(
             input_type=input_type,
@@ -100,208 +86,152 @@ def run_interaction(
             image_type=image_type,
         )
 
+        if input_type == "audio" and not normalized_text:
+            return {"message": "Sorry, I could not understand the audio."}
+
         check_output_safety(user_text=normalized_text)
 
-    except SafetyViolation as exc:
-        logger.warning(
-            "Safety violation",
-            extra={"session_id": session_id, "reason": str(exc)},
+        if detect_emergency(normalized_text):
+            return _emergency_response()
+
+        llm_result = _route_llm(
+            input_type=input_type,
+            normalized_text=normalized_text,
+            image_type=image_type,
+            state=state,
+            context=context,
+            user_id=user_id,
         )
-        return {"message": str(exc)}
 
-    # ---------------- EMERGENCY OVERRIDE ----------------
-    if detect_emergency(user_text=normalized_text):
-        logger.warning(
-            "Emergency detected",
-            extra={"session_id": session_id},
-        )
-        return {
-            "message": (
-                "This sounds serious. Please seek immediate medical help "
-                "or contact local emergency services."
-            )
-        }
+        state.update_from_llm(llm_result)
+        state.save()
 
-    # ---------------- LLM ROUTING ----------------
-    logger.warning(
-    f"ROUTING DEBUG | "
-    f"text='{normalized_text}' | "
-    f"asks_for_self_care={_asks_for_self_care(normalized_text)} | "
-    f"is_health_query={_is_health_query(normalized_text)}"
-)
-
-    try:
-        # AUDIO → GENERAL / VOICE CHAT
-        if input_type == "audio":
-            llm_result = analyze_text(
-                text=normalized_text,
-                user_id=user_id,
-            )
-
-        # DOCUMENT IMAGE → OCR → SUMMARY
-        elif input_type == "image" and image_type == "document":
-            llm_result = analyze_ocr_text(
-                text=normalized_text,
-                user_id=user_id,
-            )
-            state.last_document_text = normalized_text
-
-        # MEDICAL IMAGE → CNN ONLY (NO LLM RESPONSE)
-        elif input_type == "image":
-            image_analysis = context.get("image_analysis")
-            if image_analysis:
-                state.last_image_analysis = image_analysis
-
-            llm_result = {
-                "intent": "image_analysis",
-                "severity": "informational",
-            }
-
-        # FOLLOW-UP AFTER IMAGE ANALYSIS
-        elif input_type == "text" and state.last_image_analysis:
-            llm_result = analyze_health_text(
-                text=(
-                    "Context: The user previously uploaded a medical report.\n"
-                    f"Report analysis:\n{state.last_image_analysis}\n\n"
-                    f"User follow-up question:\n{normalized_text}\n\n"
-                    "Respond with continuity. Do NOT ask what report again."
-        ),
-        user_id=user_id,
-    )
-
-            state.update_from_llm(llm_result)
-            state.save()
-
-            return build_response(
+        response = build_response(
             llm_result=llm_result,
             context=context,
             response_mode=response_mode,
             consent=consent,
-    )
+        )
+
+        logger.info("Interaction completed", extra={"session_id": session_id})
+        return response
+
+    except SafetyViolation as exc:
+        logger.warning("Safety violation", extra={"reason": str(exc)})
+        return {"message": str(exc)}
+
+    except Exception as exc:
+        logger.exception("Unhandled interaction error")
+        return {
+            "message": "Something went wrong while processing your request."
+        }
 
 
-        # ---------------- TEXT ROUTING (FIXED ORDER) ----------------
+# ===================== HELPERS =====================
 
-        #  SELF-CARE FIRST
+def _validate_input_safety(
+    *,
+    audio: bytes | None,
+    image: bytes | None,
+    consent: Dict[str, bool],
+) -> None:
+    """Validate input safety based on user consent."""
+    if audio:
+        check_input_safety("audio", consent)
+    if image:
+        check_input_safety("image", consent)
 
-        if _asks_for_self_care(normalized_text):
-            llm_result = analyze_health_text(
-                text=normalized_text,
-                user_id=user_id,
-                mode="self_care",
-            )
 
-        # 2 HEALTH SUPPORT
-        elif _is_health_query(normalized_text):
-            llm_result = analyze_health_text(
-                text=normalized_text,
-                user_id=user_id,
-                mode="support",
-            )
+def _emergency_response() -> Dict[str, str]:
+    """Return standardized emergency response."""
+    return {
+        "message": (
+            "This sounds serious. Please seek immediate medical help "
+            "or contact local emergency services."
+        )
+    }
 
-        # Ambiguous → LLM intent classifier
-        else:
-            intent = classify_intent_llm(normalized_text)
-            if intent == "self_care":
-                llm_result = analyze_health_text(
-            text=normalized_text,
-            user_id=user_id,
-            mode="self_care",
-                )
-            elif intent == "health_support":
-                llm_result = analyze_health_text(
+
+def _route_llm(
+    *,
+    input_type: str,
+    normalized_text: str,
+    image_type: str | None,
+    state: SessionState,
+    context: Dict[str, Any],
+    user_id: str | None,
+) -> Dict[str, Any]:
+    """
+    Route the request to the appropriate LLM handler.
+    """
+    if not _is_health_query(normalized_text) and not _asks_for_self_care(normalized_text):
+        return {
+            "response_text": (
+                "I'm here to help with health-related questions only. "
+                "Please ask about symptoms, wellness, or self-care."
+            ),
+            "intent": "refusal",
+            "severity": "low",
+        }
+
+    if input_type == "audio":
+        return analyze_text(text=normalized_text, user_id=user_id)
+
+    if input_type == "image" and image_type == "document":
+        state.last_document_text = normalized_text
+        return analyze_ocr_text(text=normalized_text, user_id=user_id)
+
+    if input_type == "image":
+        state.last_image_analysis = context.get("image_analysis")
+        return {"intent": "image_analysis", "severity": "informational"}
+
+    if state.last_image_analysis:
+        return analyze_health_text(
             text=normalized_text,
             user_id=user_id,
             mode="support",
-               ) 
-            else:
-                llm_result = analyze_text(
-                text=normalized_text,
-                user_id=user_id,
-                )
-
-    except Exception:
-        logger.exception(
-            "LLM processing failed",
-            extra={"session_id": session_id},
-        )
-        return {"message": "Something went wrong while processing your request."}
-
-    # ---------------- SESSION STATE UPDATE ----------------
-    try:
-        state.update_from_llm(llm_result)
-        state.save()
-    except Exception as exc:
-        logger.error(
-            "Failed to update session state",
-            extra={"session_id": session_id, "error": str(exc)},
         )
 
-    logger.info(
-        "Interaction completed",
-        extra={"session_id": session_id},
-    )
+    intent = classify_intent_llm(normalized_text)
+    if intent in {"self_care", "health_support"}:
+        return analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+            mode="self_care" if intent == "self_care" else "support",
+        )
 
-    # ---------------- RESPONSE ----------------
-    return build_response(
-        llm_result=llm_result,
-        context=context,
-        response_mode=response_mode,
-        consent=consent,
-    )
+    return analyze_text(text=normalized_text, user_id=user_id)
 
 
-# ---------------- PRIVATE HELPERS ----------------
 def _asks_for_self_care(text: str) -> bool:
-    """
-    Detect self-care or wellness improvement queries.
-    """
-    lowered = text.lower()
-
-    triggers = [
+    """Check if the user asks for self-care guidance."""
+    triggers = {
         "self care",
         "self-care",
         "improve my health",
-        "improve health",
-        "feel healthier",
-        "be healthier",
-        "how can i improve",
-        "how to improve",
         "stay healthy",
         "healthy habits",
-        "what should i do to",
-        "what can i do to",
-        "help me improve",
-    ]
-
-    return any(trigger in lowered for trigger in triggers)
-
+        "how can i improve",
+    }
+    return any(t in text.lower() for t in triggers)
 
 
 def _is_health_query(text: str) -> bool:
-    """
-    Detect symptom-based or distress-based health queries.
-    """
-    lowered = text.lower()
-
-    symptoms = [
+    """Check if the query relates to health symptoms."""
+    symptoms = {
         "pain",
         "ache",
         "dizzy",
-        "dizziness",
         "nausea",
-        "vomit",
         "headache",
         "fever",
-        "weak",
         "anxious",
-        "anxiety",
-        "panic",
         "stress",
-        "worried",
+        "panic",
         "can't sleep",
         "not feeling well",
-    ]
+    }
+    return any(s in text.lower() for s in symptoms)
 
-    return any(symptom in lowered for symptom in symptoms)
+
 

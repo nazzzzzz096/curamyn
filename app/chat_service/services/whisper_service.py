@@ -3,6 +3,7 @@ Speech-to-text service using Whisper.
 """
 
 import os
+import subprocess
 import tempfile
 import whisper
 
@@ -19,20 +20,39 @@ def transcribe(audio_bytes: bytes) -> str:
     """
     logger.info("Whisper STT started")
 
-    tmp_path = None
+    webm_path = None
+    wav_path = None
 
     try:
+        # 1️⃣ Save incoming WEBM audio
         with tempfile.NamedTemporaryFile(
-            suffix=".wav",
-            delete=False
-        ) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
+            suffix=".webm", delete=False
+        ) as f:
+            f.write(audio_bytes)
+            webm_path = f.name
 
-        result = model.transcribe(tmp_path)
+        # 2️⃣ Convert to WAV (16kHz mono PCM)
+        wav_path = webm_path.replace(".webm", ".wav")
+
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", webm_path,
+                "-ar", "16000",
+                "-ac", "1",
+                wav_path,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+
+        # 3️⃣ Transcribe clean WAV
+        result = model.transcribe(wav_path)
 
         text = result.get("text", "").strip()
         logger.info("Whisper STT completed")
+
         return text
 
     except Exception:
@@ -40,5 +60,6 @@ def transcribe(audio_bytes: bytes) -> str:
         return ""
 
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        for path in (webm_path, wav_path):
+            if path and os.path.exists(path):
+                os.remove(path)

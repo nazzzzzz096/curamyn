@@ -1,89 +1,129 @@
 """
 Authentication API client for frontend.
 
-Handles communication with backend auth endpoints.
+Handles communication with backend authentication endpoints.
 """
 
+from typing import Any, Dict, Optional
+
 import requests
+from requests import RequestException
+
 from frontend.config import settings
+from app.chat_service.utils.logger import get_logger
 
-BACKEND_BASE_URL = "http://127.0.0.1:8000"
+logger = get_logger(__name__)
+
+BACKEND_BASE_URL = settings.API_BASE_URL
 
 
-def login_user(email: str, password: str) -> dict:
+class AuthenticationError(RuntimeError):
+    """Raised when authentication-related operations fail."""
+
+
+def _post(
+    endpoint: str,
+    *,
+    json_data: Dict[str, Any] | None = None,
+    headers: Dict[str, str] | None = None,
+    params: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """
-    Authenticate user via backend API.
-
-    Args:
-        email (str): User email
-        password (str): User password
-
-    Returns:
-        dict: JSON response containing access token
+    Internal helper to perform POST requests with error handling.
 
     Raises:
-        RuntimeError: On authentication failure
+        AuthenticationError: On request or response failure.
     """
-    response = requests.post(
-        f"{BACKEND_BASE_URL}/auth/login",
-        json={
-            "email": email,
-            "password": password,
-        },
-        timeout=10,
-    )
+    url = f"{BACKEND_BASE_URL}{endpoint}"
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            response.json().get("detail", "Login failed")
+    try:
+        response = requests.post(
+            url,
+            json=json_data,
+            headers=headers,
+            params=params,
+            timeout=10,
         )
+        response.raise_for_status()
+        return response.json()
 
-    return response.json()
+    except RequestException as exc:
+        logger.exception(
+            "HTTP request failed",
+            extra={"url": url, "payload": json_data},
+        )
+        raise AuthenticationError("Backend request failed") from exc
+
+    except ValueError as exc:
+        logger.exception(
+            "Invalid JSON response",
+            extra={"url": url},
+        )
+        raise AuthenticationError("Invalid response from server") from exc
 
 
-def signup_user(email: str, password: str) -> dict:
+def login_user(email: str, password: str) -> Dict[str, Any]:
     """
-    Register new user via backend API.
+    Authenticate a user via backend API.
 
     Args:
-        email (str): User email
-        password (str): User password
+        email: User email.
+        password: User password.
 
     Returns:
-        dict: Created user payload
+        JSON response containing access token.
 
     Raises:
-        RuntimeError: On signup failure
+        AuthenticationError: On authentication failure.
     """
-    response = requests.post(
-        f"{BACKEND_BASE_URL}/auth/signup",
-        json={
-            "email": email,
-            "password": password,
-        },
-        timeout=10,
+    logger.info("Attempting user login", extra={"email": email})
+
+    return _post(
+        "/auth/login",
+        json_data={"email": email, "password": password},
     )
 
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            response.json().get("detail", "Signup failed")
-        )
 
-    return response.json()
+def signup_user(email: str, password: str) -> Dict[str, Any]:
+    """
+    Register a new user via backend API.
+
+    Args:
+        email: User email.
+        password: User password.
+
+    Returns:
+        Created user payload.
+
+    Raises:
+        AuthenticationError: On signup failure.
+    """
+    logger.info("Attempting user signup", extra={"email": email})
+
+    return _post(
+        "/auth/signup",
+        json_data={"email": email, "password": password},
+    )
 
 
+def logout_user(token: str, session_id: Optional[str] = None) -> None:
+    """
+    Logout a user via backend API.
 
-def logout_user(token: str, session_id: str | None = None):
-    params = {}
-    if session_id:
-        params["session_id"] = session_id
+    Args:
+        token: Bearer token.
+        session_id: Optional session identifier.
 
-    response = requests.post(
-        f"{BACKEND_BASE_URL}/auth/logout",
-        headers={"Authorization": f"Bearer {token}"},
+    Raises:
+        AuthenticationError: On logout failure.
+    """
+    logger.info("Attempting user logout", extra={"session_id": session_id})
+
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"session_id": session_id} if session_id else None
+
+    _post(
+        "/auth/logout",
+        headers=headers,
         params=params,
-        timeout=10,
     )
-
-    if response.status_code != 200:
-        raise RuntimeError(response.json().get("detail", "Logout failed"))

@@ -46,13 +46,13 @@ def _load_gemini():
     """
     try:
         # Test env → always null client
-        if os.getenv("ENV") == "test":
+        if os.getenv("CURAMYN_ENV") == "test":
             return _NullGeminiClient(), None
 
         from google import genai
         from google.genai.types import GenerateContentConfig
 
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
         if not api_key:
             logger.warning("Gemini API key missing")
             return _NullGeminiClient(), None

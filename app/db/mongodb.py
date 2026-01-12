@@ -18,8 +18,8 @@ logger = get_logger(__name__)
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI")
-MONGO_DB = os.getenv("MONGO_DB", "app_db")
+MONGO_URI = os.getenv("CURAMYN_MONGO_URI")
+MONGO_DB = os.getenv("CURAMYN_MONGO_DB", "app_db")
 
 if not MONGO_URI:
     logger.critical("MONGO_URI not set in environment variables")
