@@ -1,7 +1,9 @@
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
+import pytest 
 
-def test_run_interaction_text():
-    result = run_interaction(
+@pytest.mark.asyncio
+async def test_run_interaction_text():
+    result =  await run_interaction(
         input_type="text",
         session_id="s1",
         user_id=None,

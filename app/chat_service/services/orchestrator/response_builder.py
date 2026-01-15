@@ -13,7 +13,7 @@ IMPORTANT:
 from typing import Any, Dict
 
 from app.chat_service.services.voice_pipeline_service import (
-    finalize_spoken_text,
+    normalized_response_text,
 )
 from app.chat_service.utils.logger import get_logger
 
@@ -89,7 +89,7 @@ def build_response(
         raw_text = llm_result.get("response_text", "I'm here with you.")
         severity = llm_result.get("severity", "low")
 
-        spoken_text = finalize_spoken_text(raw_text, severity)
+        spoken_text = normalized_response_text(raw_text, severity)
         return {"message": spoken_text}
 
     except Exception as exc:

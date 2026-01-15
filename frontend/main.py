@@ -66,11 +66,6 @@ def chat() -> None:
     """Chat page route."""
     _enable_dark_mode()
 
-    if not state.token:
-        logger.warning("Unauthorized access to chat; redirecting to login")
-        ui.navigate.to("/login")
-        return
-
     logger.debug("Chat page accessed")
     show_chat_page()
 

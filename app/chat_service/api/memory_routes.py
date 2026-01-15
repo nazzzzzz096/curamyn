@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, status
 from app.core.dependencies import get_current_user
 from app.chat_service.repositories.session_repositories import (
     delete_user_sessions,
+    delete_chat_sessions_by_user,
 )
 from app.consent_service.service import create_or_update_consent
 
@@ -22,11 +23,13 @@ def clear_memory(
     """
     Delete all stored memory for the current user.
     """
+    deleted_sessions = delete_chat_sessions_by_user(current_user["sub"])
     deleted_count = delete_user_sessions(current_user["sub"])
 
     return {
         "message": "Memory cleared successfully.",
         "deleted_sessions": deleted_count,
+        "deleted_chat_session": deleted_sessions,
     }
 
 
@@ -41,7 +44,7 @@ def clear_and_disable_memory(
     Delete memory and disable future memory storage.
     """
     deleted_count = delete_user_sessions(current_user["sub"])
-
+    deleted_sessions = delete_chat_sessions_by_user(current_user["sub"])
     create_or_update_consent(
         current_user["sub"],
         {"memory": False},
@@ -50,4 +53,5 @@ def clear_and_disable_memory(
     return {
         "message": "Memory cleared and future storage disabled.",
         "deleted_sessions": deleted_count,
+        "deleted_chat_session": deleted_sessions,
     }

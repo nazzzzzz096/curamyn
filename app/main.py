@@ -20,8 +20,25 @@ from app.question_service.router import router as question_router
 from app.user_service.router import router as user_router
 from app.chat_service.config import settings
 from app.chat_service.utils.logger import get_logger
+import mlflow
+import os
+
+# ---- Map Curamyn config → MLflow expected env vars ----
+os.environ["MLFLOW_TRACKING_URI"] = settings.MLFLOW_TRACKING_URI
+os.environ["MLFLOW_TRACKING_USERNAME"] = settings.DAGSHUB_USERNAME
+os.environ["MLFLOW_TRACKING_PASSWORD"] = settings.DAGSHUB_TOKEN
+
+# ---- Initialize MLflow ----
+mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+mlflow.set_experiment("curamyn")
+
 
 logger = get_logger(__name__)
+logger.info(
+    "MLflow initialized | tracking_uri=%s | user=%s",
+    mlflow.get_tracking_uri(),
+    os.environ.get("MLFLOW_TRACKING_USERNAME"),
+)
 
 app = FastAPI(
     title="Curamyn",
@@ -34,11 +51,21 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+@app.middleware("http")
+async def log_requests(request, call_next):
+    logger.info(
+        "Incoming request",
+        extra={
+            "method": request.method,
+            "url": str(request.url),
+        },
+    )
+    return await call_next(request)
 
 # -------------------------------------------------
 # Routers

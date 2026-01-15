@@ -17,7 +17,7 @@ from app.user_service.schemas import (
     UserSignup,
     UserResponse,
 )
-from app.chat_service.repositories.session_repositories import store_session_summary,get_user_sessions_by_session_id,delete_chat_session
+from app.chat_service.repositories.session_repositories import store_session_summary,delete_chat_session,get_chat_messages_for_session
 from typing import Optional
 import uuid
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -123,7 +123,7 @@ def logout(
 
     Flow:
     1. Load live session messages
-    2. Generate privacy-safe summary
+    2. Generate privacy-safe summary from conversation
     3. Persist summary
     4. Delete live session memory
     """
@@ -141,11 +141,11 @@ def logout(
         # --------------------------------------------------
         # STEP 1: LOAD LIVE SESSION (BEFORE DELETION)
         # --------------------------------------------------
-        messages = get_user_sessions_by_session_id(
+        messages = get_chat_messages_for_session(
             user_id=user_id,
             session_id=session_id,
         )
-
+        
         if messages:
             logger.info(
                 "Generating session summary",
@@ -155,16 +155,21 @@ def logout(
                 },
             )
 
-            # Adapt your message list to summary format
-            session_state = {
-                "intents": [m.get("intent") for m in messages if m.get("intent")],
-                "emotions": [m.get("emotion") for m in messages if m.get("emotion")],
-                "sentiments": [
-                    m.get("sentiment") for m in messages if m.get("sentiment")
-                ],
-            }
+            #  CHANGE STARTS HERE
+            # Extract ONLY user messages for summarization
+            user_messages = [
+            m.get("text", "").strip()
+            for m in messages
+            if m.get("author") == "You"
+            and m.get("type") == "text"
+            and m.get("text")
+            ]
 
-            summary = generate_session_summary(session_state)
+            print("user_messages",user_messages)
+            summary = generate_session_summary(
+                messages=user_messages
+            )
+            #  CHANGE ENDS HERE
 
             store_session_summary(
                 session_id=session_id,
@@ -209,3 +214,4 @@ def logout(
         "message": "Logged out successfully",
         "session_id": session_id,
     }
+

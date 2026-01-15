@@ -51,6 +51,7 @@ def analyze_health_text(
     text: str,
     user_id: str | None = None,
     mode: str = "support",
+    image_context: dict | None = None,
 ) -> dict:
     """
     Health advisor LLM.
@@ -98,6 +99,7 @@ def analyze_health_text(
                 ),
             )
             answer = _extract_text(response)
+            answer = (answer or "").strip()
             logger.warning("SELF_CARE LLM OUTPUT: %s", answer)
             if not answer:
                 logger.warning("Gemini returned no visible text — retrying with forced output")
@@ -138,7 +140,8 @@ Start writing now.
             )
 
         latency = time.time() - start_time
-
+        if not answer.endswith((".", "!", "?")):
+            answer += ". Please let me know how you are feeling right now."
         mlflow_safe(mlflow.log_param, "model", MODEL_NAME)
         mlflow_safe(
             mlflow.log_param,
@@ -149,7 +152,7 @@ Start writing now.
         mlflow_safe(mlflow.set_tag, "status", "success")
 
         return {
-            "intent": "health_advice",
+            "intent": "self-care" if mode== "self-care" else "health_support",
             "severity": "informational",
             "response_text": answer,
         }
@@ -158,27 +161,91 @@ Start writing now.
 # ==================================================
 # PROMPT BUILDER
 # ==================================================
+
 def _build_prompt(text: str, mode: str) -> str:
     if mode == "self_care":
         return f"""
-You are a health information assistant.
+You are Curamyn, a HEALTH-ONLY self-care assistant.
 
-Rules:
-- No diagnosis
-- No medicine names
-- Gentle, encouraging language
+STRICT RULES (MANDATORY):
+- ONLY discuss health, wellness, and self-care
+- NEVER answer general knowledge questions
+- NO diagnosis
+- NO medication names
+- ALL sentences must be complete
+- NO unfinished bullet points
+- NO vague reassurance
+- if you can't complete the sentence just add something related to it which doesn't affect the flow of conversation.
 
-IMPORTANT:
-You MUST produce a response.
-You MUST include:
-1. One empathetic sentence
-2. 3-5 bullet-point self-care tips
+RESPONSE STRUCTURE (REQUIRED):
+1. One empathetic sentence (complete)
+2. 3–5 clear bullet-point self-care steps
+3. One short follow-up question about health
 
-User message:
+IMPORTANT COMPLETION RULE:
+- If a sentence starts but cannot be completed safely, you MUST finish it with a neutral, supportive ending.
+- Never leave a sentence grammatically incomplete.
+- Prefer safe endings such as:
+  "are valid."
+  "are understandable."
+  "are common when dealing with health concerns."
+
+
+REDIRECTION TEMPLATE (use if off-topic):
+"I'm here to help with health and self-care only. If you'd like, we can focus on steps that may help you feel better."
+
+USER MESSAGE:
 {text}
 
-Begin your reply now:
+Provide a COMPLETE response using the structure above.
+
+
 """
+
+    #  SUPPORT MODE (THIS WAS MISSING)
+    return f"""
+You are a HEALTH SUPPORT assistant.
+
+ROLE:
+- Provide emotional reassurance
+- Help the user move forward
+- Stay strictly within health-related topics
+
+STRICT RULES:
+- NEVER diagnose
+- NEVER give medication names
+- NEVER answer non-health questions
+- NEVER trail off mid-sentence
+- ALWAYS provide a next step
+- if you can't complete the sentence just add something related to it which doesn't affect the flow of conversation.
+SUPPORT MODE BEHAVIOR:
+1. Acknowledge how the user is feeling (1 sentence)
+2. Reassure without minimizing concerns (1 sentence)
+3. Suggest a practical, safe next step (1 sentence)
+4. Ask ONLY ONE concrete follow-up question related to symptoms
+
+IMPORTANT COMPLETION RULE:
+- If a sentence starts but cannot be completed safely, you MUST finish it with a neutral, supportive ending.
+- Never leave a sentence grammatically incomplete.
+- Prefer safe endings such as:
+  "are valid."
+  "are understandable."
+  "are common when dealing with health concerns."
+
+DO NOT:
+- Ask vague questions
+- Ask multiple questions
+- Change the topic
+- Continue the conversation without direction
+
+USER MESSAGE:
+{text}
+
+Respond in 3–5 complete sentences following the structure above.
+
+
+"""
+
 
 
 def _extract_text(response) -> str:

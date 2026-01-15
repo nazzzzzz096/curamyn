@@ -4,7 +4,7 @@ CNN-based image risk analysis service.
 Performs non-diagnostic risk assessment on medical images.
 """
 
-import os
+
 import io
 import time
 from typing import Dict

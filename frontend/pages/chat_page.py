@@ -4,10 +4,10 @@ Main chat page for Curamyn frontend.
 Handles UI layout, chat interactions, audio recording,
 file uploads, consent management, memory actions, and logout.
 """
-
+from typing import Dict, Any, List
 from nicegui import ui,app
 import asyncio
-        
+from fastapi import Request       
 import json
 from frontend.state.app_state import state
 from frontend.api.upload_client import send_ai_interaction
@@ -32,15 +32,22 @@ PENDING_FILE_BYTES = None
 
 CONSENT_MENU = None
 DELETE_DIALOG = None
-
+API_BASE_URL="http://localhost:8000"
 # =================================================
 # MAIN PAGE
 # =================================================
-def show_chat_page():
+def show_chat_page() -> None:
     """
-    Render the main chat page and restore chat history on refresh.
+    Render the main chat page and load chat history safely.
+
+    Flow:
+    - Build UI
+    - After page load, browser calls internal endpoint
+    - Internal endpoint renders history inside active UI slot
     """
     global CHAT_CONTAINER, CONSENT_MENU, DELETE_DIALOG
+
+    logger.debug("Rendering chat page")
 
     ui.dark_mode().enable()
 
@@ -74,50 +81,69 @@ def show_chat_page():
                 "w-full max-w-6xl mx-auto px-6 py-6 gap-3"
             )
 
-            #  CRITICAL: LOAD HISTORY SYNCHRONOUSLY
-            if state.token and state.session_id:
-                try:
-                    messages = fetch_chat_history(
-                        token=state.token,
-                        session_id=state.session_id,
-                    )
-
-                    if messages:
-                        state.messages = messages
-                        for msg in messages:
-                            _render_message(msg)
-                    else:
-                        _add_ai("Hi 👋 How can I help you today?")
-
-                except Exception as e:
-                    print("HISTORY LOAD ERROR:", e)
-                    _add_ai("Hi 👋 How can I help you today?")
-            else:
-                _add_ai("Hi 👋 How can I help you today?")
-        ui.add_head_html("""
-<script>
-window.addEventListener('load', () => {
-    const sessionId = sessionStorage.getItem('session_id');
-    if (sessionId) {
-        fetch('/_nicegui_internal/restore_session', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ session_id: sessionId })
-        });
-    }
-});
-</script>
-""")
+            logger.info(
+                "UI slot active",
+                extra={"chat_container_ready": True},
+            )
 
         # ---------- INPUT BAR ----------
         _render_input_bar()
+
+    # ✅ Browser triggers history load AFTER DOM + slot exist
+    ui.run_javascript(
+        """
+        setTimeout(() => {
+            fetch('/_nicegui_internal/load_history', { method: 'POST' });
+        }, 50);
+        """
+    )
+@app.post("/_nicegui_internal/load_history")
+def load_history_ui() -> dict:
+    """
+    Load chat history and render it safely inside the UI slot.
+    """
+    global CHAT_CONTAINER
+
+    if CHAT_CONTAINER is None:
+        logger.warning("CHAT_CONTAINER not ready")
+        return {"ok": False}
+
+    try:
+        CHAT_CONTAINER.clear()
+
+        if not state.token or not state.session_id:
+            logger.info("No session found, showing welcome message")
+            with CHAT_CONTAINER:
+                _add_ai("Hi 👋 How can I help you today?")
+            return {"ok": True}
+
+        messages = fetch_chat_history(
+            token=state.token,
+            session_id=state.session_id,
+        )
+
+        logger.info(
+            "Rendering chat history in UI",
+            extra={"count": len(messages)},
+        )
+
+        with CHAT_CONTAINER:
+            for message in messages:
+                _render_message(message, CHAT_CONTAINER)
+
+        return {"ok": True}
+
+    except Exception:
+        logger.exception("Failed to load chat history")
+        with CHAT_CONTAINER:
+            _add_ai("Hi 👋 How can I help you today?")
+        return {"ok": False}
+
 
 
 # =================================================
 # INTERNAL ENDPOINTS
 # =================================================
-
-
 
 
 
@@ -129,17 +155,6 @@ async def add_ai(payload: dict) -> dict:
             _add_ai(text)
     return {"ok": True}
 
-
-
-
-# =================================================
-# SESSION-ID STORAGE (CRITICAL)
-# =================================================
-def _persist_session_id(session_id: str | None) -> None:
-    if session_id:
-        ui.run_javascript(
-            f"sessionStorage.setItem('session_id', '{session_id}')"
-        )
 
 
 # =================================================
@@ -173,37 +188,41 @@ def _do_delete() -> None:
     - frontend state
     - browser session storage
     """
-    async def task() -> None:
-        logger.info("User initiated memory deletion")
+    if not CHAT_CONTAINER:
+        return
 
-        try:
-            await asyncio.to_thread(delete_memory)
+    asyncio.create_task(_delete_task(CHAT_CONTAINER))
 
-            state.messages.clear()
-            state.session_id = None
+async def _delete_task(container) -> None:
+    logger.info("User initiated memory deletion")
 
-            if CHAT_CONTAINER:
-                CHAT_CONTAINER.clear()
+    try:
+        # ✅ BACKEND WORK (no UI calls)
+        await asyncio.to_thread(delete_memory)
 
-            _clear_browser_chat()
+        state.messages.clear()
+        state.session_id = None
+
+        # ✅ UI WORK — MUST be inside slot
+        with container:
+            container.clear()
+            _clear_browser_chat(container)
             _add_ai("🧹 Memory cleared. How can I help you now?")
-
-            logger.info("Memory deleted successfully")
             ui.notify(
                 "Memory deleted successfully",
                 type="positive",
             )
 
-        except Exception:
-            logger.exception("Memory deletion failed")
+        logger.info("Memory deleted successfully")
 
+    except Exception:
+        logger.exception("Memory deletion failed")
+
+        with container:
             ui.notify(
                 "Failed to delete memory. Please try again.",
                 type="negative",
             )
-
-    asyncio.create_task(task())
-
 
 # =================================================
 # CONSENT MENU
@@ -316,7 +335,7 @@ def _render_input_bar() -> None:
         "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
     ):
         with ui.row().classes(
-            "max-w-4xl mx-auto items-center gap-2"
+            "w-full px-4 items-center gap-2"
         ):
 
             # ---------- INPUT TYPE MENU ----------
@@ -352,7 +371,7 @@ def _render_input_bar() -> None:
             # ---------- TEXT INPUT ----------
             input_box = ui.input(
                 "Message Curamyn..."
-            ).classes("flex-1")
+            ).classes("flex-1 min-w-[400px]")
 
             ui.button(
                 "➤",
@@ -368,6 +387,17 @@ def _render_input_bar() -> None:
                 "🛑 Stop",
                 on_click=_stop_recording,
             )
+            ui.html("""
+<audio id="ai-audio-player" controls
+       style="
+           height:28px;
+           width:120px;
+           margin-left:8px;
+           flex:0 0 auto;
+       ">
+</audio>
+""", sanitize=False)
+
 
 
 def _start_recording() -> None:
@@ -379,6 +409,9 @@ def _start_recording() -> None:
     - Initializes MediaRecorder
     - Buffers audio chunks in the browser
     """
+    if not state.consent.get("voice"):
+        ui.notify("Voice consent is disabled", type="warning")
+        return
     logger.info("User started audio recording")
 
     ui.notify("🎙️ Recording...", type="warning")
@@ -418,15 +451,18 @@ def _start_recording() -> None:
     )
 
 
-def _stop_recording() -> None:
+async def _stop_recording() -> None:
     """
     Stop audio recording and send the captured audio
     to the backend for processing.
     """
     logger.info("User stopped audio recording")
-
     ui.notify("Recording stopped", type="info")
-
+    try:
+        await send_voice()
+        _sync_session_id_to_browser()  
+    except Exception:
+        ui.notify("Voice processing failed", type="negative")
     ui.run_javascript(
         """
         if (!window._mediaRecorder) return;
@@ -449,24 +485,29 @@ def _stop_recording() -> None:
             });
 
             const data = await res.json();
-
-            // Display text immediately
-            if (data.message) {
-                window.dispatchEvent(
-                    new CustomEvent(
-                        'ai-text',
-                        { detail: data.message }
-                    )
-                );
+            // 🔐 Persist session_id in browser
+            if (data.session_id) {
+                sessionStorage.setItem('session_id', data.session_id);
             }
 
-            // Play audio response immediately
+            
+
+            // 🔊 PLAY AUDIO USING HTML <audio> ELEMENT
             if (data.audio_base64) {
-                const audio = new Audio(
-                    'data:audio/wav;base64,' +
-                    data.audio_base64
-                );
-                audio.play();
+                const audioEl = document.getElementById('ai-audio-player');
+
+                const binary = atob(data.audio_base64);
+                const bytes = new Uint8Array(binary.length);
+
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+
+                const blob = new Blob([bytes], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+
+                audioEl.src = url;
+                audioEl.play();
             }
         };
         """
@@ -501,11 +542,13 @@ async def send_voice(audio_array: list[int]) -> dict:
             response_mode="voice",
             audio_bytes=audio_bytes,
         )
+        _handle_ai_response(result)
 
         state.session_id = result.get(
             "session_id",
             state.session_id,
         )
+        
 
         logger.info("Voice interaction processed successfully")
         return result
@@ -515,6 +558,25 @@ async def send_voice(audio_array: list[int]) -> dict:
         return {
             "error": "Failed to process voice input",
         }
+    
+
+def _sync_session_id_to_browser() -> None:
+    """
+    Sync session_id from Python state to browser sessionStorage.
+
+    Must be called ONLY from UI context.
+    """
+    if not state.session_id:
+        return
+
+    ui.run_javascript(
+        f"""
+        sessionStorage.setItem(
+            'session_id',
+            '{state.session_id}'
+        );
+        """
+    )
 
 
 # =================================================
@@ -684,6 +746,32 @@ async def _send(input_box) -> None:
             type="negative",
         )
 
+def _handle_ai_response(response: dict) -> None:
+    """
+    Handle AI backend response.
+
+    Responsibilities:
+    - Persist a newly generated session_id
+    - Keep frontend session state stable across refresh
+    """
+    new_session_id = response.get("session_id")
+
+    if not new_session_id:
+        logger.debug("No session_id found in AI response")
+        return
+
+    # Avoid overwriting an existing session
+    if state.session_id == new_session_id:
+        return
+
+    state.session_id = new_session_id
+    app.storage.user["session_id"] = new_session_id
+
+    logger.info(
+        "Session ID persisted in frontend storage",
+        extra={"session_id": new_session_id},
+    )
+
 
 async def _send_text(text: str) -> None:
     """
@@ -708,12 +796,19 @@ async def _send_text(text: str) -> None:
             text=text,
             response_mode="text",
         )
+        _handle_ai_response(response)
 
         state.session_id = response.get(
             "session_id",
             state.session_id,
         )
-        _persist_session_id(state.session_id)
+        if state.session_id:
+            ui.run_javascript(
+        f"""
+        sessionStorage.setItem('session_id', '{state.session_id}');
+        """
+    )
+
 
         message = response.get("message")
         if message:
@@ -753,12 +848,19 @@ async def _send_file() -> None:
             image_type=CURRENT_IMAGE_TYPE,
             file_bytes=PENDING_FILE_BYTES,
         )
+        _handle_ai_response(response)
 
         state.session_id = response.get(
             "session_id",
             state.session_id,
         )
-        _persist_session_id(state.session_id)
+      
+        if state.session_id:
+            ui.run_javascript(
+        f"""
+        sessionStorage.setItem('session_id', '{state.session_id}');
+        """
+    )
 
         text = response.get("response_text") or response.get("message")
         disclaimer = response.get("disclaimer")
@@ -844,34 +946,45 @@ def _add_ai(text: str) -> None:
     _scroll_to_bottom()
 
 
-def _render_message(message: dict) -> None:
-    """
-    Render a previously stored chat message.
+def _render_message(message: dict, container) -> None:
+    with container:
+        msg_type = message.get("type", "text")
 
-    Used when restoring chat history.
+        #  AUDIO
+        if msg_type == "audio":
+            data_url = (
+                f"data:{message.get('mime_type')};base64,"
+                f"{message.get('audio_data')}"
+            )
 
-    Args:
-        message: Message object containing text, author, and sent flag.
-    """
-    logger.debug(
-        "Rendering stored message",
-        extra={"author": message.get("author")},
-    )
+            with ui.row().classes(
+                "w-full justify-end" if message.get("sent") else "w-full justify-start"
+            ):
+                ui.html(
+                    f"""
+                    <audio controls style="max-width:260px">
+                        <source src="{data_url}">
+                    </audio>
+                    """,
+                    sanitize=False,
+                )
+            return
 
-    if not CHAT_CONTAINER:
-        return
+        #  IMAGE
+        if msg_type == "image":
+            data_url = (
+                f"data:{message.get('mime_type')};base64,"
+                f"{message.get('image_data')}"
+            )
+            ui.image(data_url).classes("max-w-xs rounded-lg")
+            return
 
-    with CHAT_CONTAINER:
+        #  TEXT
         bubble = ui.chat_message(
             text=message.get("text", ""),
             name=message.get("author", ""),
             sent=message.get("sent", False),
         )
-
-        if message.get("sent"):
-            bubble.classes(
-                "bg-transparent text-white shadow-none"
-            )
 
 
 
@@ -915,21 +1028,24 @@ def _store_message_js(msg: dict) -> None:
     )
 
 
-def _clear_browser_chat() -> None:
+def _clear_browser_chat(container) -> None:
     """
     Clear all stored chat messages from browser sessionStorage.
     """
+    
     logger.info("Clearing browser chat history")
 
-    ui.run_javascript(
-        """
-        try {
-            sessionStorage.removeItem('chat_messages');
-        } catch (err) {
-            console.error('Failed to clear chat history', err);
-        }
-        """
-    )
+    with container:
+        ui.run_javascript(
+            """
+            try {
+                sessionStorage.removeItem('chat_messages');
+            } catch (err) {
+                console.error('Failed to clear chat history', err);
+            }
+            """
+        )
+
 
 
 # =================================================
@@ -987,5 +1103,6 @@ def _logout() -> None:
     state.token = None
     state.session_id = None
     state.messages.clear()
+    ui.run_javascript("localStorage.removeItem('access_token')")
 
     ui.navigate.to("/login")

@@ -5,7 +5,7 @@ Handles question progression and answer persistence.
 """
 
 from typing import Dict, Optional
-
+from datetime import datetime
 from app.chat_service.utils.logger import get_logger
 from app.db.mongodb import get_collection
 
@@ -48,25 +48,19 @@ def get_next_question(user_id: str) -> Dict:
     Returns:
         Dict: Question payload or completion state.
     """
+
     logger.info("Determining next onboarding question", extra={"user_id": user_id})
 
     profiles = get_collection("user_profile")
-
-    profile = profiles.find_one({"user_id": user_id}) or {"user_id": user_id}
+    profile = profiles.find_one({"user_id": user_id}) or {}
 
     for question in ONBOARDING_QUESTIONS:
         if question["key"] not in profile:
-            logger.debug(
-                "Next onboarding question found",
-                extra={"user_id": user_id, "question_key": question["key"]},
-            )
             return {
                 "question_key": question["key"],
                 "question_text": question["question"],
                 "completed": False,
             }
-
-    logger.info("Onboarding completed", extra={"user_id": user_id})
 
     return {
         "question_key": None,
@@ -94,17 +88,15 @@ def save_answer(
     Raises:
         ValueError: If question key is invalid.
     """
+
     if question_key not in VALID_KEYS:
-        logger.warning(
-            "Invalid onboarding question key",
-            extra={"user_id": user_id, "question_key": question_key},
-        )
         raise ValueError("Invalid question key")
 
     profiles = get_collection("user_profile")
 
+    cleaned = (answer or "").strip()
     normalized_answer: Optional[str] = (
-        None if answer.strip().lower() == "skip" else answer.strip()
+        None if cleaned == "" or cleaned.lower() == "skip" else cleaned
     )
 
     logger.info(
@@ -118,8 +110,14 @@ def save_answer(
 
     profiles.update_one(
         {"user_id": user_id},
-        {"$set": {question_key: normalized_answer}},
+        {
+            "$set": {
+                question_key: normalized_answer,
+                "updated_at": datetime.utcnow(),
+            }
+        },
         upsert=True,
     )
 
     return get_next_question(user_id)
+

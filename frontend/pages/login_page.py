@@ -120,7 +120,11 @@ def _handle_login(
 
         state.token = token_data["access_token"]
         state.user_id = token_data.get("user_id")
-
+        ui.run_javascript(
+    f"""
+    localStorage.setItem('access_token', '{token_data["access_token"]}');
+    """
+)
         logger.info("Login successful")
         ui.notify(
             "Login successful",

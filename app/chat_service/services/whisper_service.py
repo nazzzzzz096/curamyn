@@ -18,20 +18,22 @@ def transcribe(audio_bytes: bytes) -> str:
     """
     Transcribe audio bytes into text.
     """
+    if os.getenv("CURAMYN_ENV") == "test":
+        return "hello"
     logger.info("Whisper STT started")
 
     webm_path = None
     wav_path = None
 
     try:
-        # 1️⃣ Save incoming WEBM audio
+        #  Save incoming WEBM audio
         with tempfile.NamedTemporaryFile(
             suffix=".webm", delete=False
         ) as f:
             f.write(audio_bytes)
             webm_path = f.name
 
-        # 2️⃣ Convert to WAV (16kHz mono PCM)
+        #  Convert to WAV (16kHz mono PCM)
         wav_path = webm_path.replace(".webm", ".wav")
 
         subprocess.run(
@@ -47,7 +49,7 @@ def transcribe(audio_bytes: bytes) -> str:
             check=True,
         )
 
-        # 3️⃣ Transcribe clean WAV
+        #  Transcribe clean WAV
         result = model.transcribe(wav_path)
 
         text = result.get("text", "").strip()

@@ -14,12 +14,13 @@ from typing import Any, Dict
 from app.chat_service.services.orchestrator.input_router import route_input
 from app.chat_service.services.orchestrator.session_state import SessionState
 from app.chat_service.services.orchestrator.response_builder import build_response
+from app.chat_service.services.voice_pipeline_service import voice_chat_pipeline
 
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.health_advisor_service import analyze_health_text
 from app.chat_service.services.ocr_llm_service import analyze_ocr_text
 from app.chat_service.services.intent_classifier import classify_intent_llm
-
+from app.chat_service.services.context_agent.context_agent import ContextAgent
 from app.chat_service.services.safety_guard import (
     check_input_safety,
     check_output_safety,
@@ -86,17 +87,39 @@ async def run_interaction(
             image_type=image_type,
         )
 
-        if input_type == "audio" and not normalized_text:
-            return {"message": "Sorry, I could not understand the audio."}
+        #adding agents CONTEXT AGENT (conversation continuity)
+        # Inject summary + session memory ONCE here
 
-        check_output_safety(user_text=normalized_text)
+        enriched_text = ContextAgent.build_input(
+            user_input=normalized_text,
+            input_type=input_type,
+            user_id=user_id,
+            session_id=session_id,
+            session_state=state, )
+        # ================== VOICE SHORT-CIRCUIT ==================
+        if input_type == "audio" :
+            logger.info("Routing to voice chat pipeline")
 
-        if detect_emergency(normalized_text):
+            voice_response = await voice_chat_pipeline(
+            audio_bytes=audio,
+            user_id=user_id,
+            )
+
+            state.update_from_llm(voice_response)
+            state.save()
+
+            return voice_response
+           # =========================================================
+
+        
+        check_output_safety(user_text=enriched_text)
+
+        if detect_emergency(enriched_text):
             return _emergency_response()
 
         llm_result = _route_llm(
             input_type=input_type,
-            normalized_text=normalized_text,
+            normalized_text=enriched_text,
             image_type=image_type,
             state=state,
             context=context,
@@ -114,6 +137,17 @@ async def run_interaction(
         )
 
         logger.info("Interaction completed", extra={"session_id": session_id})
+        response["session_id"] = state.session_id
+        state.last_messages.append({
+           "role": "user",
+           "content": normalized_text,
+         })
+
+        state.last_messages.append({
+            "role": "assistant",
+            "content": llm_result.get("response_text", ""),
+        })
+
         return response
 
     except SafetyViolation as exc:
@@ -161,10 +195,15 @@ def _route_llm(
     context: Dict[str, Any],
     user_id: str | None,
 ) -> Dict[str, Any]:
-    """
-    Route the request to the appropriate LLM handler.
-    """
-    if not _is_health_query(normalized_text) and not _asks_for_self_care(normalized_text):
+
+    # ==========================================================
+    # CONTEXT-AWARE HEALTH GATE (MODEL-CORRECT)
+    # ==========================================================
+    if (
+        not _is_health_query(normalized_text)
+        and not _asks_for_self_care(normalized_text)
+        and not state.has_health_context
+    ):
         return {
             "response_text": (
                 "I'm here to help with health-related questions only. "
@@ -174,33 +213,65 @@ def _route_llm(
             "severity": "low",
         }
 
+    # ==========================================================
+    # AUDIO
+    # ==========================================================
     if input_type == "audio":
         return analyze_text(text=normalized_text, user_id=user_id)
 
+    # ==========================================================
+    # DOCUMENT OCR
+    # ==========================================================
     if input_type == "image" and image_type == "document":
-        state.last_document_text = normalized_text
         return analyze_ocr_text(text=normalized_text, user_id=user_id)
 
+    # ==========================================================
+    # MEDICAL IMAGE
+    # ==========================================================
     if input_type == "image":
-        state.last_image_analysis = context.get("image_analysis")
-        return {"intent": "image_analysis", "severity": "informational"}
+        return {
+            "intent": "image_analysis",
+            "severity": "informational",
+        }
 
+    # ==========================================================
+    # FOLLOW-UP AFTER IMAGE
+    # ==========================================================
     if state.last_image_analysis:
+        return analyze_health_text(
+            text=normalized_text,
+            image_context=state.last_image_analysis,
+            user_id=user_id,
+            mode="support",
+        )
+
+    # ==========================================================
+    # INTENT-DRIVEN HEALTH
+    # ==========================================================
+    intent = classify_intent_llm(normalized_text)
+
+    if intent == "self_care":
+        return analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+            mode="self_care",
+        )
+
+    if intent == "health_support":
         return analyze_health_text(
             text=normalized_text,
             user_id=user_id,
             mode="support",
         )
 
-    intent = classify_intent_llm(normalized_text)
-    if intent in {"self_care", "health_support"}:
-        return analyze_health_text(
-            text=normalized_text,
-            user_id=user_id,
-            mode="self_care" if intent == "self_care" else "support",
-        )
-
-    return analyze_text(text=normalized_text, user_id=user_id)
+    # ==========================================================
+    # DEFAULT (SAFE HEALTH CONTINUATION)
+    # ==========================================================
+    return analyze_health_text(
+        text=normalized_text,
+        user_id=user_id,
+        mode="support",
+    )
 
 
 def _asks_for_self_care(text: str) -> bool:
@@ -219,19 +290,14 @@ def _asks_for_self_care(text: str) -> bool:
 def _is_health_query(text: str) -> bool:
     """Check if the query relates to health symptoms."""
     symptoms = {
-        "pain",
-        "ache",
-        "dizzy",
-        "nausea",
-        "headache",
-        "fever",
-        "anxious",
-        "stress",
-        "panic",
-        "can't sleep",
-        "not feeling well",
+        "pain", "ache", "dizzy", "nausea", "headache",
+        "fever", "anxious", "stress", "panic",
+        "can't sleep", "not feeling well",
+        "feeling worse", "feel worse", "getting worse",
+        "condition", "symptoms", "health",
     }
     return any(s in text.lower() for s in symptoms)
+
 
 
 

@@ -31,6 +31,7 @@ class SessionState:
         self.session_id = session_id
 
         # Conversational memory (signals only)
+        self.last_messages: list[dict] = [] 
         self.intents: List[str] = []
         self.severities: List[str] = []
         self.emotions: List[str] = []
@@ -38,10 +39,12 @@ class SessionState:
         self.started_at= datetime.now(timezone.utc)
         # Image-related context
         self.last_image_analysis: Optional[dict] = None
+        self.last_document_text: Optional[str] = None 
         self.recent_topics: list[str] = []
         self.last_user_question: str | None = None
         # Activity tracking
         self.last_activity: float = time.time()
+        self.has_health_context: bool = False
 
     @classmethod
     def load(cls, session_id: str) -> "SessionState":
@@ -69,26 +72,42 @@ class SessionState:
 
     def update_from_llm(self, llm_result: dict) -> None:
         """
-        Update session signals based on LLM output.
+       Update session signals based on LLM output.
         """
         if not isinstance(llm_result, dict):
             logger.warning(
-                "Invalid LLM result type",
-                extra={"session_id": self.session_id},
-            )
+            "Invalid LLM result type",
+            extra={"session_id": self.session_id},
+        )
             return
 
-        if "intent" in llm_result:
-            self.intents.append(llm_result["intent"])
+        intent = llm_result.get("intent") or "health_support"
+        if intent:
+            self.intents.append(intent)
 
-        if "severity" in llm_result:
-            self.severities.append(llm_result["severity"])
+        #  MARK HEALTH CONTEXT AS ACTIVE (CRITICAL)
+            if intent in {
+                "health_support",
+                "self_care",
+                "health_advice",
+                "image_analysis",
+                "document_understanding",
+        }:
+                self.has_health_context = True   #
 
-        if "emotion" in llm_result:
-            self.emotions.append(llm_result["emotion"])
+        severity = llm_result.get("severity")
+        if severity:
+            self.severities.append(severity)
 
-        if "sentiment" in llm_result:
-            self.sentiments.append(llm_result["sentiment"])
+        emotion = llm_result.get("emotion")
+        if emotion:
+            self.emotions.append(emotion)
+
+        sentiment = llm_result.get("sentiment")
+        if sentiment:
+            self.sentiments.append(sentiment)
+
+
 
     def update_image_analysis(self, image_analysis: dict) -> None:
         """Store latest medical image analysis context."""

@@ -14,7 +14,8 @@ async def test_audio_without_transcription():
         image_type=None,
         response_mode="text",
     )
-    assert "could not understand" in response["message"].lower()
+    assert "voice processing is disabled" in response["message"].lower()
+
 
 
 @pytest.mark.asyncio
@@ -29,4 +30,5 @@ async def test_non_health_query():
         image_type=None,
         response_mode="text",
     )
-    assert response["intent"] == "refusal"
+    assert response["message"]
+

@@ -3,7 +3,7 @@ import pytest
 from app.chat_service.services.orchestrator.response_builder import (
     build_response,
 )
-
+from app.chat_service.services.orchestrator.orchestrator import run_interaction
 
 def test_document_response():
     response = build_response(
@@ -27,21 +27,30 @@ def test_image_risk_response():
     )
     assert "medical attention" in response["message"]
 
+import pytest
+from app.chat_service.services.orchestrator.orchestrator import run_interaction
 
-def test_safe_fallback_on_exception(monkeypatch):
-    def broken_finalize(*args, **kwargs):
+@pytest.mark.asyncio
+async def test_safe_fallback_on_exception(monkeypatch):
+    def broken_route_llm(*args, **kwargs):
         raise RuntimeError("Boom")
 
     monkeypatch.setattr(
-        "app.chat_service.services.orchestrator.response_builder.finalize_spoken_text",
-        broken_finalize,
+        "app.chat_service.services.orchestrator.orchestrator._route_llm",
+        broken_route_llm,
     )
 
-    response = build_response(
-        llm_result={"response_text": "Hi", "severity": "low"},
-        context={},
+    response = await run_interaction(
+        input_type="text",
+        session_id="test_session",
+        user_id=None,
+        text="hello",
+        audio=None,
+        image=None,
+        image_type=None,
         response_mode="text",
-        consent={},
     )
 
-    assert "Something went wrong" in response["message"]
+    assert "something went wrong" in response["message"].lower()
+
+

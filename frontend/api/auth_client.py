@@ -42,7 +42,7 @@ def _post(
             json=json_data,
             headers=headers,
             params=params,
-            timeout=10,
+            timeout=30,
         )
         response.raise_for_status()
         return response.json()

@@ -10,7 +10,6 @@ import os
 import re
 import json
 import time
-from types import SimpleNamespace
 
 import mlflow
 from dotenv import load_dotenv
@@ -164,7 +163,7 @@ User:
         contents=prompt,
         config=GenerateContentConfig(
             temperature=0.0,
-            max_output_tokens=150,
+            max_output_tokens=600,
         ) if GenerateContentConfig else None,
     )
 
