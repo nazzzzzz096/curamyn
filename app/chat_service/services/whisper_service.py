@@ -8,10 +8,13 @@ import tempfile
 import whisper
 
 from app.chat_service.utils.logger import get_logger
-
 logger = get_logger(__name__)
 
-model = whisper.load_model("base")
+if os.getenv("CURAMYN_ENV") == "test":
+    model = None
+else:
+    model = whisper.load_model("base")
+
 
 
 def transcribe(audio_bytes: bytes) -> str:
