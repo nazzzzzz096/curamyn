@@ -3,7 +3,8 @@
 # =========================
 fastapi==0.110.0
 uvicorn==0.29.0
-httpx==0.25.2
+httpx[http2]==0.25.2
+
 # =========================
 # Authentication & Security
 # =========================
@@ -31,6 +32,7 @@ google-generativeai==0.3.2
 # Experiment Tracking
 # =========================
 mlflow==2.11.3
+rich==13.7.0
 
 # =========================
 # Voice Processing
@@ -66,3 +68,10 @@ python-multipart==0.0.9
 # Validation
 # =========================
 email-validator==2.1.1
+# =========================
+# Async Testing
+# =========================
+pytest-asyncio==0.23.5
+pytest-cov==4.1.0
+anyio==4.2.0
+

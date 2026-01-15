@@ -11,21 +11,28 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
 
+    services:
+      mongo:
+        image: mongo:6
+        ports:
+          - 27017:27017
+
     env:
-      ENV: test
+      CURAMYN_ENV: test
       PYTHONPATH: .
 
-      # Dummy values (CI-safe)
-      GEMINI_API_KEY: dummy
-      JWT_SECRET: dummy
-      MONGO_URI: mongodb://localhost:27017
-      MONGO_DB: test_db
-      MLFLOW_TRACKING_URI: ""
-      DAGSHUB_USERNAME: ""
-      DAGSHUB_TOKEN: ""
-      AWS_ACCESS_KEY_ID: dummy
-      AWS_SECRET_ACCESS_KEY: dummy
-      S3_BUCKET_NAME: dummy-bucket
+      CURAMYN_GEMINI_API_KEY: dummy
+      CURAMYN_JWT_SECRET: dummy
+      CURAMYN_MONGO_URI: mongodb://localhost:27017
+      CURAMYN_MONGO_DB: test_db
+
+      CURAMYN_MLFLOW_TRACKING_URI: ""
+      CURAMYN_DAGSHUB_USERNAME: ""
+      CURAMYN_DAGSHUB_TOKEN: ""
+
+      CURAMYN_AWS_ACCESS_KEY_ID: dummy
+      CURAMYN_AWS_SECRET_ACCESS_KEY: dummy
+      CURAMYN_S3_BUCKET_NAME: dummy-bucket
 
     steps:
       - name: Checkout code
@@ -40,6 +47,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Wait for MongoDB
+        run: |
+          for i in {1..10}; do
+            if nc -z localhost 27017; then
+              echo "MongoDB is up"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Run pytest
         run: |
