@@ -25,7 +25,7 @@ jobs:
       CURAMYN_JWT_SECRET: dummy
       CURAMYN_MONGO_URI: mongodb://localhost:27017
       CURAMYN_MONGO_DB: test_db
-
+      CURAMYN_STORAGE_SECRET: dummy
       CURAMYN_MLFLOW_TRACKING_URI: ""
       CURAMYN_DAGSHUB_USERNAME: ""
       CURAMYN_DAGSHUB_TOKEN: ""
