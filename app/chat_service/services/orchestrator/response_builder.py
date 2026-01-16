@@ -125,5 +125,3 @@ def _risk_message(risk: str) -> str:
         )
 
     return "No critical abnormalities were detected."
-
-

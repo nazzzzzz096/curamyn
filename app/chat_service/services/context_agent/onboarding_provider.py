@@ -3,6 +3,7 @@ from app.chat_service.repositories.session_repositories import (
     get_onboarding_from_session,
 )
 
+
 def get_onboarding_context(user_id: str) -> Optional[str]:
     """
     Returns a compact, privacy-safe onboarding summary for chat context.

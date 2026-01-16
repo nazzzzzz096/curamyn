@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional
 from contextlib import contextmanager
 
 from app.chat_service.utils.logger import get_logger
+
 logger = get_logger(__name__)
 
 
@@ -73,19 +74,10 @@ def mlflow_context(run_name: str | None = None):
                     mlflow.end_run()
                     logger.info(
                         "MLflow run ended",
-                        extra={
-                            "run_id": run.info.run_id if run else None
-                        },
+                        extra={"run_id": run.info.run_id if run else None},
                     )
             except Exception:
                 logger.exception("Failed to end MLflow run")
-
-
-
-
-
-
-
 
 
 def mlflow_safe(

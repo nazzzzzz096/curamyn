@@ -51,9 +51,7 @@ def send_message(
     payload = {
         "input_type": "text",
         "text": text,
-        "image_type": (
-            "skin" if is_skin else "xray" if is_xray else None
-        ),
+        "image_type": ("skin" if is_skin else "xray" if is_xray else None),
         "response_mode": "text",
     }
 
@@ -83,15 +81,11 @@ def send_message(
             "Chat request failed",
             extra={"url": url},
         )
-        raise ChatRequestError(
-            "Failed to communicate with AI service"
-        ) from exc
+        raise ChatRequestError("Failed to communicate with AI service") from exc
 
     except ValueError as exc:
         logger.exception(
             "Invalid JSON response from backend",
             extra={"url": url},
         )
-        raise ChatRequestError(
-            "Invalid response received from AI service"
-        ) from exc
+        raise ChatRequestError("Invalid response received from AI service") from exc

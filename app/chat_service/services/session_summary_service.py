@@ -22,6 +22,7 @@ load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
 
+
 # ==================================================
 # INTERNAL LLM LOADER (SUMMARY ONLY)
 # ==================================================
@@ -64,7 +65,7 @@ def _generate_summary_llm(*, prompt: str) -> Dict:
             model=MODEL_NAME,
             contents=prompt,
             config=GenerateContentConfig(
-                temperature=0.0,        # deterministic JSON
+                temperature=0.0,  # deterministic JSON
                 max_output_tokens=800,  # prevent truncation
             ),
         )
@@ -83,7 +84,7 @@ def _generate_summary_llm(*, prompt: str) -> Dict:
 
 
 # ==================================================
-# PUBLIC API 
+# PUBLIC API
 # ==================================================
 def generate_session_summary(messages: List[str]) -> Dict:
     """
@@ -218,18 +219,25 @@ def _base_summary_from_transcript(transcript: str) -> Dict:
     return {
         "summary_text": "The user discussed health-related thoughts and personal well-being.",
         "primary_intent": (
-            "self_care" if any(w in text for w in ["diet", "sleep", "yoga", "exercise"])
+            "self_care"
+            if any(w in text for w in ["diet", "sleep", "yoga", "exercise"])
             else "general_health"
         ),
         "primary_emotion": (
-            "calm" if any(w in text for w in ["calm", "happy", "motivated"])
-            else "stressed" if any(w in text for w in ["stress", "tired", "anxious"])
-            else None
+            "calm"
+            if any(w in text for w in ["calm", "happy", "motivated"])
+            else (
+                "stressed"
+                if any(w in text for w in ["stress", "tired", "anxious"])
+                else None
+            )
         ),
         "overall_sentiment": (
-            "positive" if any(w in text for w in ["happy", "motivated"])
-            else "negative" if any(w in text for w in ["stress", "tired"])
-            else "neutral"
+            "positive"
+            if any(w in text for w in ["happy", "motivated"])
+            else (
+                "negative" if any(w in text for w in ["stress", "tired"]) else "neutral"
+            )
         ),
         "severity_peak": "low",
     }

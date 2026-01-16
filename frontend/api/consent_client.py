@@ -62,15 +62,11 @@ def get_consent(*, token: str) -> Dict[str, bool]:
 
     except RequestException as exc:
         logger.exception("Failed to fetch user consent")
-        raise ConsentApiError(
-            "Unable to fetch consent settings"
-        ) from exc
+        raise ConsentApiError("Unable to fetch consent settings") from exc
 
     except ValueError as exc:
         logger.exception("Invalid response while fetching consent")
-        raise ConsentApiError(
-            "Invalid consent response received"
-        ) from exc
+        raise ConsentApiError("Invalid consent response received") from exc
 
 
 def update_consent(*, token: str, consent_data: Dict[str, bool]) -> None:
@@ -114,12 +110,8 @@ def update_consent(*, token: str, consent_data: Dict[str, bool]) -> None:
 
     except RequestException as exc:
         logger.exception("Failed to update user consent")
-        raise ConsentApiError(
-            "Unable to update consent settings"
-        ) from exc
+        raise ConsentApiError("Unable to update consent settings") from exc
 
     except ValueError as exc:
         logger.exception("Invalid response while updating consent")
-        raise ConsentApiError(
-            "Invalid consent update response received"
-        ) from exc
+        raise ConsentApiError("Invalid consent update response received") from exc

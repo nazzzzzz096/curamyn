@@ -3,6 +3,7 @@ from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.utils.logger import get_logger
 import base64
 from app.chat_service.services.tts_streamer import stream_tts
+
 logger = get_logger(__name__)
 
 
@@ -19,8 +20,6 @@ def normalized_response_text(text: str, severity: str) -> str:
     }
 
     return f"{text}. {endings.get(severity, ['I hear you.'])[0]}"
-
-
 
 
 async def voice_chat_pipeline(

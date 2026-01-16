@@ -4,7 +4,6 @@ CNN-based image risk analysis service.
 Performs non-diagnostic risk assessment on medical images.
 """
 
-
 import io
 import time
 from typing import Dict
@@ -126,11 +125,7 @@ def predict_risk(
             logger.exception("CNN inference failed")
             raise RuntimeError("Model inference failed") from exc
 
-        risk = (
-            "needs_attention"
-            if probability >= settings.RISK_THRESHOLD
-            else "normal"
-        )
+        risk = "needs_attention" if probability >= settings.RISK_THRESHOLD else "normal"
 
         latency = time.time() - start_time
 

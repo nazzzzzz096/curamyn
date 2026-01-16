@@ -1,6 +1,7 @@
 import edge_tts
 from typing import AsyncGenerator
 
+
 async def stream_tts(text: str) -> AsyncGenerator[bytes, None]:
     communicate = edge_tts.Communicate(
         text=text,

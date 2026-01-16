@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from typing import Dict, List,Any
+from typing import Dict, List, Any
 
 from app.core.dependencies import get_current_user
 from app.chat_service.repositories.session_repositories import (
@@ -14,7 +14,6 @@ router = APIRouter(
     prefix="/chat",
     tags=["Chat"],
 )
-
 
 
 def _serialize_message(db_message: dict) -> Dict[str, object]:
@@ -49,7 +48,6 @@ def _serialize_message(db_message: dict) -> Dict[str, object]:
     }
 
 
-
 @router.get("/history")
 def get_chat_history(
     session_id: str = Query(...),
@@ -75,10 +73,13 @@ def get_chat_history(
         },
     )
 
-    raw_messages = get_user_sessions_by_session_id(
-        user_id=user_id,
-        session_id=session_id,
-    ) or []
+    raw_messages = (
+        get_user_sessions_by_session_id(
+            user_id=user_id,
+            session_id=session_id,
+        )
+        or []
+    )
 
     messages = [_serialize_message(msg) for msg in raw_messages]
 
@@ -89,7 +90,6 @@ def get_chat_history(
             "session_id": session_id,
         },
     )
-    
 
     return {"messages": messages}
 

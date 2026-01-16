@@ -34,10 +34,10 @@ ALLOWED_INPUT_TYPES = {"text", "audio", "image"}
 ALLOWED_RESPONSE_MODES = {"text", "voice"}
 
 
-
 # ======================================================
 # ROUTES
 # ======================================================
+
 
 @router.post("/interact")
 async def ai_interact(
@@ -107,7 +107,7 @@ async def ai_interact(
 
     # ---------- Persist Chat ----------
     try:
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         # -------- USER MESSAGE --------
         if input_type == "text":
@@ -183,9 +183,8 @@ async def ai_interact(
             )
 
         logger.info(
-        f"Chat messages stored successfully | session_id={session_id} | user_id={user_id}"
+            f"Chat messages stored successfully | session_id={session_id} | user_id={user_id}"
         )
-
 
     except Exception:
         logger.exception(

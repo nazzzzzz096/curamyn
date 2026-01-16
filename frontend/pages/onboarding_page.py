@@ -22,7 +22,6 @@ def show_onboarding_page() -> None:
         ui.navigate.to("/login")
         return
 
-
     with ui.element("div").classes(
         "flex justify-center items-center min-h-screen w-full bg-[#0f172a]"
     ):
@@ -34,9 +33,8 @@ def show_onboarding_page() -> None:
         render_question(card)
 
 
-
 def render_question(card) -> None:
-    """ Clear the card and render the next onboarding question. """
+    """Clear the card and render the next onboarding question."""
     logger.debug("Rendering onboarding question")
 
     card.clear()
@@ -72,7 +70,7 @@ def render_question(card) -> None:
                 on_click=lambda: submit_and_reload(
                     card=card,
                     question_key=data["question_key"],
-                    value="", 
+                    value="",
                 ),
             ).props("flat").classes("text-gray-400")
 
@@ -83,9 +81,7 @@ def render_question(card) -> None:
                     question_key=data["question_key"],
                     value=answer_input.value,
                 ),
-            ).classes(
-                "bg-emerald-600 text-white font-semibold"
-            )
+            ).classes("bg-emerald-600 text-white font-semibold")
 
 
 def submit_and_reload(

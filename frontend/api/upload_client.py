@@ -100,8 +100,8 @@ def send_ai_interaction(
         response = requests.post(
             url,
             headers=headers,
-            data=data,              # multipart-safe
-            files=files or None,    # only include if present
+            data=data,  # multipart-safe
+            files=files or None,  # only include if present
             timeout=60,
         )
         response.raise_for_status()
@@ -112,15 +112,11 @@ def send_ai_interaction(
             "AI interaction request failed",
             extra={"url": url},
         )
-        raise AiInteractionError(
-            "Failed to communicate with AI service"
-        ) from exc
+        raise AiInteractionError("Failed to communicate with AI service") from exc
 
     except ValueError as exc:
         logger.exception(
             "Invalid JSON response from AI backend",
             extra={"url": url},
         )
-        raise AiInteractionError(
-            "Invalid response received from AI service"
-        ) from exc
+        raise AiInteractionError("Invalid response received from AI service") from exc

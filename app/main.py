@@ -56,6 +56,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 @app.middleware("http")
 async def log_requests(request, call_next):
     logger.info(
@@ -66,6 +68,7 @@ async def log_requests(request, call_next):
         },
     )
     return await call_next(request)
+
 
 # -------------------------------------------------
 # Routers
@@ -98,6 +101,7 @@ logger.info(
 # Health
 # -------------------------------------------------
 
+
 @app.get("/health", tags=["health"])
 def health_check() -> dict:
     """
@@ -107,4 +111,3 @@ def health_check() -> dict:
         dict: Application health status.
     """
     return {"status": "ok"}
-

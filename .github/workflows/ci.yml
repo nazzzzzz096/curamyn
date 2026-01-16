@@ -61,3 +61,5 @@ jobs:
       - name: Run pytest
         run: |
           pytest -v --disable-warnings --maxfail=1
+      - name: Black formatting check
+        run: black --check .

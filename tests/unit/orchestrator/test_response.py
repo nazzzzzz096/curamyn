@@ -5,6 +5,7 @@ from app.chat_service.services.orchestrator.response_builder import (
 )
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
 
+
 def test_document_response():
     response = build_response(
         llm_result={
@@ -27,8 +28,10 @@ def test_image_risk_response():
     )
     assert "medical attention" in response["message"]
 
+
 import pytest
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
+
 
 @pytest.mark.asyncio
 async def test_safe_fallback_on_exception(monkeypatch):
@@ -52,5 +55,3 @@ async def test_safe_fallback_on_exception(monkeypatch):
     )
 
     assert "something went wrong" in response["message"].lower()
-
-

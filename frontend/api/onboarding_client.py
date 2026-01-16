@@ -54,15 +54,11 @@ def get_next_question(*, token: str) -> Dict[str, Any]:
 
     except RequestException as exc:
         logger.exception("Failed to fetch next question")
-        raise QuestionsApiError(
-            "Unable to fetch next question"
-        ) from exc
+        raise QuestionsApiError("Unable to fetch next question") from exc
 
     except ValueError as exc:
         logger.exception("Invalid response received for next question")
-        raise QuestionsApiError(
-            "Invalid response from questions service"
-        ) from exc
+        raise QuestionsApiError("Invalid response from questions service") from exc
 
 
 def submit_answer(
@@ -118,12 +114,8 @@ def submit_answer(
             "Failed to submit answer",
             extra={"question_key": question_key},
         )
-        raise QuestionsApiError(
-            "Unable to submit answer"
-        ) from exc
+        raise QuestionsApiError("Unable to submit answer") from exc
 
     except ValueError as exc:
         logger.exception("Invalid response received after submitting answer")
-        raise QuestionsApiError(
-            "Invalid response from questions service"
-        ) from exc
+        raise QuestionsApiError("Invalid response from questions service") from exc

@@ -87,7 +87,7 @@ async def run_interaction(
             image_type=image_type,
         )
 
-        #adding agents CONTEXT AGENT (conversation continuity)
+        # adding agents CONTEXT AGENT (conversation continuity)
         # Inject summary + session memory ONCE here
 
         enriched_text = ContextAgent.build_input(
@@ -95,23 +95,23 @@ async def run_interaction(
             input_type=input_type,
             user_id=user_id,
             session_id=session_id,
-            session_state=state, )
+            session_state=state,
+        )
         # ================== VOICE SHORT-CIRCUIT ==================
-        if input_type == "audio" :
+        if input_type == "audio":
             logger.info("Routing to voice chat pipeline")
 
             voice_response = await voice_chat_pipeline(
-            audio_bytes=audio,
-            user_id=user_id,
+                audio_bytes=audio,
+                user_id=user_id,
             )
 
             state.update_from_llm(voice_response)
             state.save()
 
             return voice_response
-           # =========================================================
+        # =========================================================
 
-        
         check_output_safety(user_text=enriched_text)
 
         if detect_emergency(enriched_text):
@@ -138,15 +138,19 @@ async def run_interaction(
 
         logger.info("Interaction completed", extra={"session_id": session_id})
         response["session_id"] = state.session_id
-        state.last_messages.append({
-           "role": "user",
-           "content": normalized_text,
-         })
+        state.last_messages.append(
+            {
+                "role": "user",
+                "content": normalized_text,
+            }
+        )
 
-        state.last_messages.append({
-            "role": "assistant",
-            "content": llm_result.get("response_text", ""),
-        })
+        state.last_messages.append(
+            {
+                "role": "assistant",
+                "content": llm_result.get("response_text", ""),
+            }
+        )
 
         return response
 
@@ -156,12 +160,11 @@ async def run_interaction(
 
     except Exception as exc:
         logger.exception("Unhandled interaction error")
-        return {
-            "message": "Something went wrong while processing your request."
-        }
+        return {"message": "Something went wrong while processing your request."}
 
 
 # ===================== HELPERS =====================
+
 
 def _validate_input_safety(
     *,
@@ -195,6 +198,22 @@ def _route_llm(
     context: Dict[str, Any],
     user_id: str | None,
 ) -> Dict[str, Any]:
+    CONFIRMATIONS = {"yes", "yes.", "ok", "okay", "okay.", "sure"}
+
+    SAFE_ACTION_FALLBACK = (
+    "That is okay. Let us start gently. "
+    "Take a slow breath in through your nose. "
+    "Let it out slowly through your mouth. "
+    "Relax your shoulders as you sit. "
+    "Would you like to continue with another calming step?"
+    )
+
+    if normalized_text.strip().lower() in CONFIRMATIONS:
+        return {
+        "intent": "self-care",
+        "severity": "informational",
+        "response_text": SAFE_ACTION_FALLBACK,
+    }
 
     # ==========================================================
     # CONTEXT-AWARE HEALTH GATE (MODEL-CORRECT)
@@ -249,7 +268,10 @@ def _route_llm(
     # INTENT-DRIVEN HEALTH
     # ==========================================================
     intent = classify_intent_llm(normalized_text)
-
+    # ==========================================================
+    # CONTEXT-AWARE HEALTH GATE 
+    # ==========================================================
+    
     if intent == "self_care":
         return analyze_health_text(
             text=normalized_text,
@@ -289,15 +311,20 @@ def _asks_for_self_care(text: str) -> bool:
 
 def _is_health_query(text: str) -> bool:
     """Check if the query relates to health symptoms."""
-    symptoms = {
-        "pain", "ache", "dizzy", "nausea", "headache",
-        "fever", "anxious", "stress", "panic",
-        "can't sleep", "not feeling well",
-        "feeling worse", "feel worse", "getting worse",
-        "condition", "symptoms", "health",
+
+    health_triggers = {
+        # symptoms
+        "pain", "ache", "aches", "dizzy", "nausea", "fever",
+
+        # anxiety & mental health
+        "anxious", "anxiety", "uneasy", "worried", "overthinking",
+        "panic", "fear", "stress",
+
+        # body awareness
+        "body", "sensations", "symptom", "symptoms",
+
+        # general health words
+        "health", "wellbeing", "well-being",
     }
-    return any(s in text.lower() for s in symptoms)
-
-
-
+    return any(t in text.lower() for t in health_triggers)
 

@@ -59,15 +59,11 @@ def delete_memory() -> Dict[str, Any]:
             "Failed to delete user memory",
             extra={"url": url},
         )
-        raise MemoryApiError(
-            "Unable to delete user memory"
-        ) from exc
+        raise MemoryApiError("Unable to delete user memory") from exc
 
     except ValueError as exc:
         logger.exception(
             "Invalid response while deleting memory",
             extra={"url": url},
         )
-        raise MemoryApiError(
-            "Invalid response received from server"
-        ) from exc
+        raise MemoryApiError("Invalid response received from server") from exc

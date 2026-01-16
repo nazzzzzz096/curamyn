@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 # SESSION SUMMARY
 # =================================================
 
+
 def store_session_summary(
     session_id: str,
     user_id: str,
@@ -104,6 +105,7 @@ def delete_user_sessions(user_id: str) -> int:
 # =================================================
 # CHAT SESSIONS
 # =================================================
+
 
 def get_chat_messages_for_session(
     user_id: str,
@@ -205,9 +207,7 @@ def delete_chat_session(user_id: str, session_id: str) -> None:
     """
     try:
         collection = get_collection("chat_sessions")
-        collection.delete_one(
-            {"user_id": user_id, "session_id": session_id}
-        )
+        collection.delete_one({"user_id": user_id, "session_id": session_id})
 
         logger.info(
             "Chat session deleted",
@@ -220,6 +220,7 @@ def delete_chat_session(user_id: str, session_id: str) -> None:
             extra={"user_id": user_id, "session_id": session_id},
         )
         raise
+
 
 def delete_chat_sessions_by_user(user_id: str) -> int:
     """

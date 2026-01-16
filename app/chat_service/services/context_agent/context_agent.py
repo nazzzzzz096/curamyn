@@ -53,22 +53,15 @@ class ContextAgent:
                 lines = []
 
                 if profile.get("emotional_baseline"):
-                    lines.append(
-                       f"Emotional baseline: {profile['emotional_baseline']}"
-                       )
+                    lines.append(f"Emotional baseline: {profile['emotional_baseline']}")
 
                 if profile.get("medications"):
-                    lines.append(
-                     f"Medications: {profile['medications']}"
-                    )
+                    lines.append(f"Medications: {profile['medications']}")
 
                 if profile.get("known_conditions"):
-                    lines.append(
-                   f"Known conditions: {profile['known_conditions']}"
-                )
+                    lines.append(f"Known conditions: {profile['known_conditions']}")
 
                 profile_text = "; ".join(lines)
-
 
         # -------------------------------
         # 2. LONG-TERM CONTEXT (DB)
@@ -116,5 +109,3 @@ System hints:
 User message:
 {user_input}
 """.strip()
-
-

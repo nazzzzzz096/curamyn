@@ -16,4 +16,3 @@ def test_llm_fallback_used_when_gemini_response_invalid(monkeypatch):
     result = llm_service.analyze_text(text="How are you?")
 
     assert result["response_text"] == "I'm here with you."
-

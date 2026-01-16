@@ -12,4 +12,3 @@ class QuestionResponse(BaseModel):
 class AnswerRequest(BaseModel):
     question_key: str
     answer: str
-

@@ -70,8 +70,8 @@ class Settings(BaseSettings):
 
     model_config = ConfigDict(
         env_file=".env",
-        env_prefix="CURAMYN_", 
-        extra="forbid",        
+        env_prefix="CURAMYN_",
+        extra="forbid",
     )
 
 

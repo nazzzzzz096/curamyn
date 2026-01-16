@@ -28,7 +28,11 @@ if not MONGO_URI:
 
 try:
     logger.info("Initializing MongoDB client")
-    _client = MongoClient(MONGO_URI,tls=True,tlsCAFile=certifi.where(),)
+    _client = MongoClient(
+        MONGO_URI,
+        tls=True,
+        tlsCAFile=certifi.where(),
+    )
     _database = _client[MONGO_DB]
     logger.info(
         "MongoDB connection established",
@@ -65,7 +69,4 @@ def get_collection(collection_name: str) -> Collection[Any]:
             "Failed to access MongoDB collection",
             extra={"collection": collection_name, "error": str(exc)},
         )
-        raise RuntimeError(
-            f"Unable to access collection: {collection_name}"
-        ) from exc
-
+        raise RuntimeError(f"Unable to access collection: {collection_name}") from exc

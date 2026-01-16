@@ -5,7 +5,7 @@ Handles question progression and answer persistence.
 """
 
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from app.chat_service.utils.logger import get_logger
 from app.db.mongodb import get_collection
 
@@ -113,11 +113,10 @@ def save_answer(
         {
             "$set": {
                 question_key: normalized_answer,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         upsert=True,
     )
 
     return get_next_question(user_id)
-

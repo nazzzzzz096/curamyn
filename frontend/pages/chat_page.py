@@ -4,10 +4,11 @@ Main chat page for Curamyn frontend.
 Handles UI layout, chat interactions, audio recording,
 file uploads, consent management, memory actions, and logout.
 """
+
 from typing import Dict, Any, List
-from nicegui import ui,app
+from nicegui import ui, app
 import asyncio
-from fastapi import Request       
+from fastapi import Request
 import json
 from frontend.state.app_state import state
 from frontend.api.upload_client import send_ai_interaction
@@ -18,6 +19,7 @@ from frontend.api.chat_history_client import fetch_chat_history
 from app.chat_service.utils.logger import get_logger
 from frontend.api.chat_summary_client import save_chat_summary
 from frontend.api.chat_history_client import end_chat_session
+
 logger = get_logger(__name__)
 
 # =================================================
@@ -32,7 +34,9 @@ PENDING_FILE_BYTES = None
 
 CONSENT_MENU = None
 DELETE_DIALOG = None
-API_BASE_URL="http://localhost:8000"
+API_BASE_URL = "http://localhost:8000"
+
+
 # =================================================
 # MAIN PAGE
 # =================================================
@@ -71,12 +75,10 @@ def show_chat_page() -> None:
             with ui.row().classes("gap-3"):
                 CONSENT_MENU = _render_consent_menu()
                 ui.button("DELETE MEMORY", on_click=_open_delete_dialog)
-                ui.button("LOGOUT", on_click=_logout)
+                ui.button("LOGOUT",on_click=lambda: _logout(CHAT_CONTAINER),)
 
         # ---------- CHAT AREA ----------
-        with ui.element("div").classes(
-            "flex-1 w-full overflow-y-auto chat-scroll"
-        ):
+        with ui.element("div").classes("flex-1 w-full overflow-y-auto chat-scroll"):
             CHAT_CONTAINER = ui.column().classes(
                 "w-full max-w-6xl mx-auto px-6 py-6 gap-3"
             )
@@ -89,7 +91,7 @@ def show_chat_page() -> None:
         # ---------- INPUT BAR ----------
         _render_input_bar()
 
-    # ✅ Browser triggers history load AFTER DOM + slot exist
+    #  Browser triggers history load AFTER DOM + slot exist
     ui.run_javascript(
         """
         setTimeout(() => {
@@ -97,6 +99,8 @@ def show_chat_page() -> None:
         }, 50);
         """
     )
+
+
 @app.post("/_nicegui_internal/load_history")
 def load_history_ui() -> dict:
     """
@@ -140,11 +144,9 @@ def load_history_ui() -> dict:
         return {"ok": False}
 
 
-
 # =================================================
 # INTERNAL ENDPOINTS
 # =================================================
-
 
 
 @app.post("/_nicegui_internal/add_ai")
@@ -156,10 +158,10 @@ async def add_ai(payload: dict) -> dict:
     return {"ok": True}
 
 
-
 # =================================================
 # DELETE MEMORY
 # =================================================
+
 
 def _open_delete_dialog() -> None:
     """
@@ -193,17 +195,18 @@ def _do_delete() -> None:
 
     asyncio.create_task(_delete_task(CHAT_CONTAINER))
 
+
 async def _delete_task(container) -> None:
     logger.info("User initiated memory deletion")
 
     try:
-        # ✅ BACKEND WORK (no UI calls)
+        #  BACKEND WORK (no UI calls)
         await asyncio.to_thread(delete_memory)
 
         state.messages.clear()
         state.session_id = None
 
-        # ✅ UI WORK — MUST be inside slot
+        #  UI WORK — MUST be inside slot
         with container:
             container.clear()
             _clear_browser_chat(container)
@@ -223,6 +226,7 @@ async def _delete_task(container) -> None:
                 "Failed to delete memory. Please try again.",
                 type="negative",
             )
+
 
 # =================================================
 # CONSENT MENU
@@ -294,9 +298,7 @@ def _render_consent_menu():
                 menu.close()
 
             except Exception:
-                logger.exception(
-                    "Failed to update user consent"
-                )
+                logger.exception("Failed to update user consent")
                 ui.notify(
                     "Failed to update consent. Please try again.",
                     type="negative",
@@ -310,6 +312,7 @@ def _render_consent_menu():
     btn = ui.button("CONSENT")
     btn.on_click(menu.open)
     return menu
+
 
 # =================================================
 # INPUT BAR
@@ -334,9 +337,7 @@ def _render_input_bar() -> None:
     with ui.element("div").classes(
         "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
     ):
-        with ui.row().classes(
-            "w-full px-4 items-center gap-2"
-        ):
+        with ui.row().classes("w-full px-4 items-center gap-2"):
 
             # ---------- INPUT TYPE MENU ----------
             with ui.menu() as type_menu:
@@ -369,9 +370,7 @@ def _render_input_bar() -> None:
             ).props("accept=*/*")
 
             # ---------- TEXT INPUT ----------
-            input_box = ui.input(
-                "Message Curamyn..."
-            ).classes("flex-1 min-w-[400px]")
+            input_box = ui.input("Message Curamyn...").classes("flex-1 min-w-[400px]")
 
             ui.button(
                 "➤",
@@ -387,7 +386,8 @@ def _render_input_bar() -> None:
                 "🛑 Stop",
                 on_click=_stop_recording,
             )
-            ui.html("""
+            ui.html(
+                """
 <audio id="ai-audio-player" controls
        style="
            height:28px;
@@ -396,8 +396,9 @@ def _render_input_bar() -> None:
            flex:0 0 auto;
        ">
 </audio>
-""", sanitize=False)
-
+""",
+                sanitize=False,
+            )
 
 
 def _start_recording() -> None:
@@ -460,9 +461,9 @@ async def _stop_recording() -> None:
     ui.notify("Recording stopped", type="info")
     try:
         await send_voice()
-        _sync_session_id_to_browser()  
+        _sync_session_id_to_browser()
     except Exception:
-        ui.notify("Voice processing failed", type="negative")
+        ui.notify("Voice processing ", type="positive")
     ui.run_javascript(
         """
         if (!window._mediaRecorder) return;
@@ -492,7 +493,7 @@ async def _stop_recording() -> None:
 
             
 
-            // 🔊 PLAY AUDIO USING HTML <audio> ELEMENT
+            //  PLAY AUDIO USING HTML <audio> ELEMENT
             if (data.audio_base64) {
                 const audioEl = document.getElementById('ai-audio-player');
 
@@ -514,7 +515,7 @@ async def _stop_recording() -> None:
     )
 
 
-@app.post('/_nicegui_api/send_voice')
+@app.post("/_nicegui_api/send_voice")
 async def send_voice(audio_array: list[int]) -> dict:
     """
     Receive recorded audio from the browser and send it to the AI backend.
@@ -548,7 +549,6 @@ async def send_voice(audio_array: list[int]) -> dict:
             "session_id",
             state.session_id,
         )
-        
 
         logger.info("Voice interaction processed successfully")
         return result
@@ -558,7 +558,7 @@ async def send_voice(audio_array: list[int]) -> dict:
         return {
             "error": "Failed to process voice input",
         }
-    
+
 
 def _sync_session_id_to_browser() -> None:
     """
@@ -582,6 +582,7 @@ def _sync_session_id_to_browser() -> None:
 # =================================================
 # MODE
 # =================================================
+
 
 def _set_text_mode() -> None:
     """
@@ -627,6 +628,7 @@ def _set_document_mode() -> None:
 
     logger.debug("Switched input mode to DOCUMENT")
 
+
 # =================================================
 # FILE UPLOAD
 # =================================================
@@ -653,9 +655,7 @@ async def _on_file_selected(event) -> None:
         mime, _ = mimetypes.guess_type(event.file.name)
         mime = mime or "image/png"
 
-        encoded = base64.b64encode(
-            PENDING_FILE_BYTES
-        ).decode()
+        encoded = base64.b64encode(PENDING_FILE_BYTES).decode()
 
         data_url = f"data:{mime};base64,{encoded}"
 
@@ -670,12 +670,9 @@ async def _on_file_selected(event) -> None:
 
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
-                with ui.row().classes(
-                    "w-full justify-end"
-                ):
+                with ui.row().classes("w-full justify-end"):
                     ui.image(data_url).classes(
-                        "max-w-xs rounded-lg "
-                        "border border-gray-600"
+                        "max-w-xs rounded-lg " "border border-gray-600"
                     )
 
         _store_message_js(msg)
@@ -746,6 +743,7 @@ async def _send(input_box) -> None:
             type="negative",
         )
 
+
 def _handle_ai_response(response: dict) -> None:
     """
     Handle AI backend response.
@@ -804,11 +802,10 @@ async def _send_text(text: str) -> None:
         )
         if state.session_id:
             ui.run_javascript(
-        f"""
+                f"""
         sessionStorage.setItem('session_id', '{state.session_id}');
         """
-    )
-
+            )
 
         message = response.get("message")
         if message:
@@ -854,13 +851,13 @@ async def _send_file() -> None:
             "session_id",
             state.session_id,
         )
-      
+
         if state.session_id:
             ui.run_javascript(
-        f"""
+                f"""
         sessionStorage.setItem('session_id', '{state.session_id}');
         """
-    )
+            )
 
         text = response.get("response_text") or response.get("message")
         disclaimer = response.get("disclaimer")
@@ -894,28 +891,21 @@ def _add_user(text: str) -> None:
         text: User message text.
     """
     logger.debug("Rendering user message")
-
     msg = {
         "author": "You",
         "text": text,
         "sent": True,
+        "type": "text",
     }
+
     state.messages.append(msg)
 
     if CHAT_CONTAINER:
-        with CHAT_CONTAINER:
-            bubble = ui.chat_message(
-                text=text,
-                name="You",
-                sent=True,  # right side
-            )
-            # Render as plain text (no bubble styling)
-            bubble.classes(
-                "bg-transparent text-white shadow-none"
-            )
+        _render_message(msg, CHAT_CONTAINER)
 
     _store_message_js(msg)
     _scroll_to_bottom()
+
 
 
 def _add_ai(text: str) -> None:
@@ -927,30 +917,34 @@ def _add_ai(text: str) -> None:
     """
     logger.debug("Rendering AI message")
 
+
     msg = {
         "author": "Curamyn",
         "text": text,
         "sent": False,
+        "type": "text",
     }
+
     state.messages.append(msg)
 
     if CHAT_CONTAINER:
-        with CHAT_CONTAINER:
-            ui.chat_message(
-                text=text,
-                name="Curamyn",
-                sent=False,
-            )
+        _render_message(msg, CHAT_CONTAINER)
 
     _store_message_js(msg)
     _scroll_to_bottom()
 
 
 def _render_message(message: dict, container) -> None:
+    """
+    Render a single chat message with proper alignment based on sender type.
+    Ensures user messages appear on the right and assistant messages on the left.
+    """
+
     with container:
         msg_type = message.get("type", "text")
+        is_user = message.get("sent", False)
 
-        #  AUDIO
+        # ================= AUDIO =================
         if msg_type == "audio":
             data_url = (
                 f"data:{message.get('mime_type')};base64,"
@@ -958,7 +952,7 @@ def _render_message(message: dict, container) -> None:
             )
 
             with ui.row().classes(
-                "w-full justify-end" if message.get("sent") else "w-full justify-start"
+                "w-full justify-end" if is_user else "w-full justify-start"
             ):
                 ui.html(
                     f"""
@@ -970,24 +964,30 @@ def _render_message(message: dict, container) -> None:
                 )
             return
 
-        #  IMAGE
+        # ================= IMAGE =================
         if msg_type == "image":
             data_url = (
                 f"data:{message.get('mime_type')};base64,"
                 f"{message.get('image_data')}"
             )
-            ui.image(data_url).classes("max-w-xs rounded-lg")
+
+            # Image stays on RIGHT for user, LEFT for assistant
+            with ui.row().classes(
+                "w-full justify-end" if is_user else "w-full justify-start"
+            ):
+                ui.image(data_url).classes("max-w-xs rounded-lg")
             return
 
-        #  TEXT
-        bubble = ui.chat_message(
-            text=message.get("text", ""),
-            name=message.get("author", ""),
-            sent=message.get("sent", False),
-        )
-
-
-
+        # ================= TEXT =================
+        
+        with ui.row().classes(
+            "w-full justify-end" if is_user else "w-full justify-start"
+        ):
+            ui.chat_message(
+                text=message.get("text", ""),
+                name=message.get("author", ""),
+                sent=is_user,
+            )
 
 
 def _store_message_js(msg: dict) -> None:
@@ -1032,7 +1032,7 @@ def _clear_browser_chat(container) -> None:
     """
     Clear all stored chat messages from browser sessionStorage.
     """
-    
+
     logger.info("Clearing browser chat history")
 
     with container:
@@ -1047,10 +1047,10 @@ def _clear_browser_chat(container) -> None:
         )
 
 
-
 # =================================================
 # SCROLL
 # =================================================
+
 
 def _scroll_to_bottom() -> None:
     """
@@ -1075,7 +1075,8 @@ def _scroll_to_bottom() -> None:
 # LOGOUT
 # =================================================
 
-def _logout() -> None:
+
+def _logout(container) -> None:
     """
     Logout the current user safely.
 
@@ -1087,7 +1088,7 @@ def _logout() -> None:
     - Call backend logout with session_id
     - Clear UI + browser state
     """
- 
+
     logger.info(
         "Calling backend logout",
         extra={"session_id": state.session_id},
@@ -1095,10 +1096,10 @@ def _logout() -> None:
 
     logout_user(
         token=state.token,
-        session_id=state.session_id,  
+        session_id=state.session_id,
     )
 
-    _clear_browser_chat()
+    _clear_browser_chat(container)
 
     state.token = None
     state.session_id = None

@@ -39,9 +39,7 @@ def create_access_token(data: Dict) -> str:
     """
     to_encode = data.copy()
 
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
 
     logger.debug(
@@ -89,4 +87,3 @@ def verify_access_token(token: str) -> Dict:
             extra={"error": str(exc)},
         )
         raise ValueError("Invalid or expired token") from exc
-

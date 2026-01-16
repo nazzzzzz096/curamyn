@@ -59,16 +59,11 @@ def save_chat_summary(*, token: str, summary: str) -> None:
             "Failed to save chat summary",
             extra={"url": url},
         )
-        raise ChatSummaryError(
-            "Unable to save chat summary"
-        ) from exc
+        raise ChatSummaryError("Unable to save chat summary") from exc
 
     except ValueError as exc:
         logger.exception(
             "Invalid response while saving chat summary",
             extra={"url": url},
         )
-        raise ChatSummaryError(
-            "Invalid response received from server"
-        ) from exc
-
+        raise ChatSummaryError("Invalid response received from server") from exc

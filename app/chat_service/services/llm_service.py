@@ -22,6 +22,7 @@ load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
 
+
 # --------------------------------------------------
 # Test-safe dummy client (so unittest.patch works)
 # --------------------------------------------------
@@ -32,8 +33,6 @@ class _NullGeminiClient:
         @staticmethod
         def generate_content(*args, **kwargs):
             return None
-
-
 
 
 # ==================================================
@@ -74,7 +73,6 @@ def analyze_text(
     """
     Voice psychologist / general chat LLM.
     """
-
 
     # Respect patched client in unit tests
     active_client, GenerateContentConfig = _load_gemini()
@@ -161,10 +159,14 @@ User:
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt,
-        config=GenerateContentConfig(
-            temperature=0.0,
-            max_output_tokens=600,
-        ) if GenerateContentConfig else None,
+        config=(
+            GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=600,
+            )
+            if GenerateContentConfig
+            else None
+        ),
     )
 
     raw = _extract_text(response)
@@ -210,10 +212,14 @@ User:
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt,
-        config=GenerateContentConfig(
-            temperature=0.4,
-            max_output_tokens=512,
-        ) if GenerateContentConfig else None,
+        config=(
+            GenerateContentConfig(
+                temperature=0.4,
+                max_output_tokens=512,
+            )
+            if GenerateContentConfig
+            else None
+        ),
     )
 
     spoken = _extract_text(response)

@@ -1,11 +1,13 @@
 import pytest
 from unittest.mock import MagicMock
 
+
 @pytest.fixture
 def mock_gemini_response():
     class MockResponse:
         text = "I hear you. Want to talk about it?"
         candidates = []
+
     return MockResponse()
 
 

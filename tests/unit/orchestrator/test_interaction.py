@@ -17,7 +17,6 @@ async def test_audio_without_transcription():
     assert "voice processing is disabled" in response["message"].lower()
 
 
-
 @pytest.mark.asyncio
 async def test_non_health_query():
     response = await run_interaction(
@@ -31,4 +30,3 @@ async def test_non_health_query():
         response_mode="text",
     )
     assert response["message"]
-

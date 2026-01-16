@@ -19,7 +19,6 @@ client = None
 MODEL_NAME = "models/gemini-flash-latest"
 
 
-
 # ==================================================
 # Lazy Gemini loader
 # ==================================================
@@ -31,7 +30,7 @@ def _load_gemini():
         return None, None
 
     try:
-        from google import  genai
+        from google import genai
         from google.generativeai.types import GenerationConfig
 
         api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
@@ -67,12 +66,11 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         )
 
     active_client, GenerationConfig = (
-    (client, None) if client is not None else _load_gemini()
-)
+        (client, None) if client is not None else _load_gemini()
+    )
 
     if active_client is None:
         return _fallback_text_response()
-
 
     if active_client is None:
         return _fallback_text_response()
@@ -90,10 +88,14 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             response = active_client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
-                generation_config=GenerationConfig(
-                    temperature=0.2,
-                    max_output_tokens=400,
-                ) if GenerationConfig else None,
+                generation_config=(
+                    GenerationConfig(
+                        temperature=0.2,
+                        max_output_tokens=400,
+                    )
+                    if GenerationConfig
+                    else None
+                ),
             )
             output = _extract_llm_text(response)
 
@@ -141,8 +143,15 @@ def _fallback_text() -> str:
 
 def _is_medical_document(text: str) -> bool:
     keywords = [
-        "blood", "cbc", "hemoglobin", "platelet",
-        "wbc", "rbc", "esr", "lab report", "test result",
+        "blood",
+        "cbc",
+        "hemoglobin",
+        "platelet",
+        "wbc",
+        "rbc",
+        "esr",
+        "lab report",
+        "test result",
     ]
     text_lower = text.lower()
     return any(k in text_lower for k in keywords)
@@ -169,5 +178,3 @@ def _extract_llm_text(response) -> str:
     if isinstance(text, str) and text.strip():
         return text.strip()
     return ""
-
-

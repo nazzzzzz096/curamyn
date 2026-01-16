@@ -24,17 +24,12 @@ def show_login_page() -> None:
         "w-screen h-screen items-center justify-center bg-[#0f172a]"
     ):
         with ui.card().classes(
-            "w-[380px] bg-[#111827] text-white "
-            "shadow-xl rounded-2xl p-6"
+            "w-[380px] bg-[#111827] text-white " "shadow-xl rounded-2xl p-6"
         ):
 
             # -------- TITLE --------
-            ui.label("Curamyn").classes(
-                "text-2xl font-bold text-center mb-1"
-            )
-            ui.label("Welcome back").classes(
-                "text-sm text-gray-400 text-center mb-6"
-            )
+            ui.label("Curamyn").classes("text-2xl font-bold text-center mb-1")
+            ui.label("Welcome back").classes("text-sm text-gray-400 text-center mb-6")
 
             # -------- INPUTS --------
             email = (
@@ -80,9 +75,7 @@ def show_login_page() -> None:
             ui.button(
                 "Create account",
                 on_click=lambda: ui.navigate.to("/signup"),
-            ).props("flat").classes(
-                "w-full text-emerald-400"
-            )
+            ).props("flat").classes("w-full text-emerald-400")
 
 
 def _handle_login(
@@ -121,10 +114,10 @@ def _handle_login(
         state.token = token_data["access_token"]
         state.user_id = token_data.get("user_id")
         ui.run_javascript(
-    f"""
+            f"""
     localStorage.setItem('access_token', '{token_data["access_token"]}');
     """
-)
+        )
         logger.info("Login successful")
         ui.notify(
             "Login successful",

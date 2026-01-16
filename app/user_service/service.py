@@ -5,7 +5,7 @@ Handles user creation and authentication.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from passlib.context import CryptContext
@@ -74,7 +74,7 @@ def create_user(email: str, password: str) -> Dict:
         "user_id": str(uuid.uuid4()),
         "email": email,
         "hashed_password": hash_password(password),
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     }
 
     users.insert_one(user_data)

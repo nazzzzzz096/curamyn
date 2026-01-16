@@ -8,13 +8,13 @@ import tempfile
 import whisper
 
 from app.chat_service.utils.logger import get_logger
+
 logger = get_logger(__name__)
 
 if os.getenv("CURAMYN_ENV") == "test":
     model = None
 else:
     model = whisper.load_model("base")
-
 
 
 def transcribe(audio_bytes: bytes) -> str:
@@ -30,9 +30,7 @@ def transcribe(audio_bytes: bytes) -> str:
 
     try:
         #  Save incoming WEBM audio
-        with tempfile.NamedTemporaryFile(
-            suffix=".webm", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             f.write(audio_bytes)
             webm_path = f.name
 
@@ -41,10 +39,14 @@ def transcribe(audio_bytes: bytes) -> str:
 
         subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-i", webm_path,
-                "-ar", "16000",
-                "-ac", "1",
+                "ffmpeg",
+                "-y",
+                "-i",
+                webm_path,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
                 wav_path,
             ],
             stdout=subprocess.DEVNULL,

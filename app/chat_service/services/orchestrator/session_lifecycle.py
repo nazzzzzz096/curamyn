@@ -5,7 +5,7 @@ Handles session termination, summarization,
 and cleanup of in-memory session state.
 """
 
-from datetime import datetime,timezone
+from datetime import datetime, timezone
 
 from app.chat_service.services.orchestrator.session_state import (
     _SESSION_STORE,
@@ -52,10 +52,10 @@ def end_session(*, session_id: str, user_id: str) -> None:
                 user_id=user_id,
                 summary={
                     **summary,
-                    "started_at":state.started_at,
+                    "started_at": state.started_at,
                     "ended_at": datetime.now(timezone.utc),
                     "duration_sec": (
-                        datetime.now(timezone.utc)-state.started_at
+                        datetime.now(timezone.utc) - state.started_at
                     ).total_seconds(),
                 },
             )

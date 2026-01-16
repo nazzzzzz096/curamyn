@@ -9,7 +9,7 @@ from typing import Callable
 
 from nicegui import ui
 
-from app.chat_service.utils.logger  import get_logger
+from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,13 +35,9 @@ def auth_layout(title: str, content_fn: Callable[[], None]) -> None:
         "bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
     ):
         with ui.card().classes("w-[380px] p-8 bg-slate-900 shadow-2xl"):
-            ui.label(title).classes(
-                "text-2xl font-bold text-white mb-2"
-            )
+            ui.label(title).classes("text-2xl font-bold text-white mb-2")
 
-            ui.label("Welcome to Curamyn").classes(
-                "text-slate-400 mb-6"
-            )
+            ui.label("Welcome to Curamyn").classes("text-slate-400 mb-6")
 
             try:
                 content_fn()
@@ -50,9 +46,7 @@ def auth_layout(title: str, content_fn: Callable[[], None]) -> None:
                     "Failed to render auth layout content",
                     extra={"title": title},
                 )
-                ui.label(
-                    "Something went wrong. Please refresh the page."
-                ).classes("text-red-400")
-                raise RuntimeError(
-                    "Auth layout rendering failed"
-                ) from exc
+                ui.label("Something went wrong. Please refresh the page.").classes(
+                    "text-red-400"
+                )
+                raise RuntimeError("Auth layout rendering failed") from exc

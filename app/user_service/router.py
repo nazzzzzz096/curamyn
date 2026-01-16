@@ -3,8 +3,9 @@ Authentication API routes.
 
 Handles user signup and login workflows.
 """
+
 from app.chat_service.services.session_summary_service import generate_session_summary
-from fastapi import APIRouter, HTTPException, status,Query
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi import Depends
 from app.core.dependencies import get_current_user
 from app.chat_service.services.orchestrator.session_lifecycle import end_session
@@ -17,12 +18,18 @@ from app.user_service.schemas import (
     UserSignup,
     UserResponse,
 )
-from app.chat_service.repositories.session_repositories import store_session_summary,delete_chat_session,get_chat_messages_for_session
+from app.chat_service.repositories.session_repositories import (
+    store_session_summary,
+    delete_chat_session,
+    get_chat_messages_for_session,
+)
 from typing import Optional
 import uuid
+
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 logger = get_logger(__name__)
+
 
 @router.post(
     "/signup",
@@ -67,6 +74,7 @@ def signup(payload: UserSignup) -> UserResponse:
             detail="Internal server error",
         ) from exc
 
+
 @router.post(
     "/login",
     response_model=TokenResponse,
@@ -91,7 +99,7 @@ def login(payload: UserLogin) -> TokenResponse:
             {
                 "sub": user["user_id"],
                 "email": user["email"],
-                "session_id": session_id,  
+                "session_id": session_id,
             }
         )
 
@@ -145,7 +153,7 @@ def logout(
             user_id=user_id,
             session_id=session_id,
         )
-        
+
         if messages:
             logger.info(
                 "Generating session summary",
@@ -158,17 +166,15 @@ def logout(
             #  CHANGE STARTS HERE
             # Extract ONLY user messages for summarization
             user_messages = [
-            m.get("text", "").strip()
-            for m in messages
-            if m.get("author") == "You"
-            and m.get("type") == "text"
-            and m.get("text")
+                m.get("text", "").strip()
+                for m in messages
+                if m.get("author") == "You"
+                and m.get("type") == "text"
+                and m.get("text")
             ]
 
-            print("user_messages",user_messages)
-            summary = generate_session_summary(
-                messages=user_messages
-            )
+            print("user_messages", user_messages)
+            summary = generate_session_summary(messages=user_messages)
             #  CHANGE ENDS HERE
 
             store_session_summary(
@@ -214,4 +220,3 @@ def logout(
         "message": "Logged out successfully",
         "session_id": session_id,
     }
-

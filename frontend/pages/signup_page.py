@@ -23,8 +23,7 @@ def show_signup_page() -> None:
         "w-screen h-screen items-center justify-center bg-[#0f172a]"
     ):
         with ui.card().classes(
-            "w-[380px] bg-[#111827] text-white "
-            "shadow-xl rounded-2xl p-6"
+            "w-[380px] bg-[#111827] text-white " "shadow-xl rounded-2xl p-6"
         ):
 
             # -------- TITLE --------
@@ -77,9 +76,9 @@ def show_signup_page() -> None:
             ui.button(
                 "Login",
                 on_click=lambda: ui.navigate.to("/login"),
-            ).props("flat").classes(
-                "w-full text-emerald-400"
-            )
+            ).props(
+                "flat"
+            ).classes("w-full text-emerald-400")
 
 
 def _handle_signup(

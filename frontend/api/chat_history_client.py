@@ -68,18 +68,14 @@ def fetch_chat_history(
             "Failed to fetch chat history",
             extra={"session_id": session_id},
         )
-        raise ChatHistoryError(
-            "Unable to fetch chat history"
-        ) from exc
+        raise ChatHistoryError("Unable to fetch chat history") from exc
 
     except ValueError as exc:
         logger.exception(
             "Invalid JSON received while fetching chat history",
             extra={"session_id": session_id},
         )
-        raise ChatHistoryError(
-            "Invalid response received from server"
-        ) from exc
+        raise ChatHistoryError("Invalid response received from server") from exc
 
 
 def end_chat_session(
@@ -123,6 +119,4 @@ def end_chat_session(
             "Failed to end chat session",
             extra={"session_id": session_id},
         )
-        raise ChatHistoryError(
-            "Unable to end chat session"
-        ) from exc
+        raise ChatHistoryError("Unable to end chat session") from exc
