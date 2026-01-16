@@ -201,19 +201,19 @@ def _route_llm(
     CONFIRMATIONS = {"yes", "yes.", "ok", "okay", "okay.", "sure"}
 
     SAFE_ACTION_FALLBACK = (
-    "That is okay. Let us start gently. "
-    "Take a slow breath in through your nose. "
-    "Let it out slowly through your mouth. "
-    "Relax your shoulders as you sit. "
-    "Would you like to continue with another calming step?"
+        "That is okay. Let us start gently. "
+        "Take a slow breath in through your nose. "
+        "Let it out slowly through your mouth. "
+        "Relax your shoulders as you sit. "
+        "Would you like to continue with another calming step?"
     )
 
     if normalized_text.strip().lower() in CONFIRMATIONS:
         return {
-        "intent": "self-care",
-        "severity": "informational",
-        "response_text": SAFE_ACTION_FALLBACK,
-    }
+            "intent": "self-care",
+            "severity": "informational",
+            "response_text": SAFE_ACTION_FALLBACK,
+        }
 
     # ==========================================================
     # CONTEXT-AWARE HEALTH GATE (MODEL-CORRECT)
@@ -269,9 +269,9 @@ def _route_llm(
     # ==========================================================
     intent = classify_intent_llm(normalized_text)
     # ==========================================================
-    # CONTEXT-AWARE HEALTH GATE 
+    # CONTEXT-AWARE HEALTH GATE
     # ==========================================================
-    
+
     if intent == "self_care":
         return analyze_health_text(
             text=normalized_text,
@@ -314,17 +314,29 @@ def _is_health_query(text: str) -> bool:
 
     health_triggers = {
         # symptoms
-        "pain", "ache", "aches", "dizzy", "nausea", "fever",
-
+        "pain",
+        "ache",
+        "aches",
+        "dizzy",
+        "nausea",
+        "fever",
         # anxiety & mental health
-        "anxious", "anxiety", "uneasy", "worried", "overthinking",
-        "panic", "fear", "stress",
-
+        "anxious",
+        "anxiety",
+        "uneasy",
+        "worried",
+        "overthinking",
+        "panic",
+        "fear",
+        "stress",
         # body awareness
-        "body", "sensations", "symptom", "symptoms",
-
+        "body",
+        "sensations",
+        "symptom",
+        "symptoms",
         # general health words
-        "health", "wellbeing", "well-being",
+        "health",
+        "wellbeing",
+        "well-being",
     }
     return any(t in text.lower() for t in health_triggers)
-

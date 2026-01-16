@@ -75,7 +75,10 @@ def show_chat_page() -> None:
             with ui.row().classes("gap-3"):
                 CONSENT_MENU = _render_consent_menu()
                 ui.button("DELETE MEMORY", on_click=_open_delete_dialog)
-                ui.button("LOGOUT",on_click=lambda: _logout(CHAT_CONTAINER),)
+                ui.button(
+                    "LOGOUT",
+                    on_click=lambda: _logout(CHAT_CONTAINER),
+                )
 
         # ---------- CHAT AREA ----------
         with ui.element("div").classes("flex-1 w-full overflow-y-auto chat-scroll"):
@@ -907,7 +910,6 @@ def _add_user(text: str) -> None:
     _scroll_to_bottom()
 
 
-
 def _add_ai(text: str) -> None:
     """
     Render an AI message in the chat UI and store it.
@@ -916,7 +918,6 @@ def _add_ai(text: str) -> None:
         text: AI-generated message text.
     """
     logger.debug("Rendering AI message")
-
 
     msg = {
         "author": "Curamyn",
@@ -979,7 +980,7 @@ def _render_message(message: dict, container) -> None:
             return
 
         # ================= TEXT =================
-        
+
         with ui.row().classes(
             "w-full justify-end" if is_user else "w-full justify-start"
         ):
