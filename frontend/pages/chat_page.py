@@ -3,6 +3,8 @@ Main chat page for Curamyn frontend.
 
 Handles UI layout, chat interactions, audio recording,
 file uploads, consent management, memory actions, and logout.
+
+ENHANCED with typing indicators and loading states.
 """
 
 from typing import Dict, Any, List
@@ -27,6 +29,7 @@ logger = get_logger(__name__)
 # =================================================
 CHAT_CONTAINER = None
 UPLOAD_WIDGET = None
+TYPING_INDICATOR = None  # NEW: For typing animation
 
 CURRENT_MODE = "text"
 CURRENT_IMAGE_TYPE = None
@@ -35,6 +38,64 @@ PENDING_FILE_BYTES = None
 CONSENT_MENU = None
 DELETE_DIALOG = None
 API_BASE_URL = "http://localhost:8000"
+
+
+# =================================================
+# TYPING INDICATOR COMPONENT
+# =================================================
+def _create_typing_indicator():
+    """
+    Create an animated typing indicator to show AI is thinking.
+    """
+    with ui.row().classes("w-full justify-start items-center gap-2 px-4 py-2"):
+        ui.avatar("C", color="bg-emerald-600").classes("text-white text-sm")
+
+        with ui.card().classes(
+            "bg-slate-800 px-4 py-3 rounded-2xl border border-slate-700"
+        ):
+            with ui.row().classes("gap-1 items-center"):
+                ui.label("Curamyn is thinking").classes("text-slate-300 text-sm mr-2")
+
+                # Animated dots
+                ui.html(
+                    """
+                    <div class="flex gap-1">
+                        <div class="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
+                        <div class="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 150ms"></div>
+                        <div class="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 300ms"></div>
+                    </div>
+                """,
+                    sanitize=False,
+                )
+
+
+def _show_typing_indicator():
+    """
+    Show the typing indicator in the chat container.
+    """
+    global TYPING_INDICATOR
+
+    if CHAT_CONTAINER and TYPING_INDICATOR is None:
+        with CHAT_CONTAINER:
+            TYPING_INDICATOR = ui.column().classes("w-full")
+            with TYPING_INDICATOR:
+                _create_typing_indicator()
+
+        _scroll_to_bottom()
+        logger.debug("Typing indicator shown")
+
+
+def _hide_typing_indicator():
+    """
+    Remove the typing indicator from the chat container.
+    """
+    global TYPING_INDICATOR
+
+    if TYPING_INDICATOR:
+        TYPING_INDICATOR.clear()
+        TYPING_INDICATOR.delete()
+        TYPING_INDICATOR = None
+        logger.debug("Typing indicator hidden")
 
 
 # =================================================
@@ -158,6 +219,40 @@ async def add_ai(payload: dict) -> dict:
     if text and CHAT_CONTAINER:
         with CHAT_CONTAINER:
             _add_ai(text)
+    return {"ok": True}
+
+
+@app.post("/_nicegui_internal/add_user_audio")
+async def add_user_audio(payload: dict) -> dict:
+    """
+    Add user's recorded audio message to the chat UI.
+    """
+    audio_bytes = payload.get("audio_bytes", [])
+
+    if audio_bytes and CHAT_CONTAINER:
+        # Convert bytes array back to bytes
+        audio_data = bytes(audio_bytes)
+
+        import base64
+
+        encoded_audio = base64.b64encode(audio_data).decode()
+
+        msg = {
+            "author": "You",
+            "sent": True,
+            "type": "audio",
+            "audio_data": encoded_audio,
+            "mime_type": "audio/webm",
+        }
+
+        state.messages.append(msg)
+
+        with CHAT_CONTAINER:
+            _render_message(msg, CHAT_CONTAINER)
+
+        _store_message_js(msg)
+        _scroll_to_bottom()
+
     return {"ok": True}
 
 
@@ -413,9 +508,6 @@ def _start_recording() -> None:
     - Initializes MediaRecorder
     - Buffers audio chunks in the browser
     """
-    if not state.consent.get("voice"):
-        ui.notify("Voice consent is disabled", type="warning")
-        return
     logger.info("User started audio recording")
 
     ui.notify("🎙️ Recording...", type="warning")
@@ -462,11 +554,7 @@ async def _stop_recording() -> None:
     """
     logger.info("User stopped audio recording")
     ui.notify("Recording stopped", type="info")
-    try:
-        await send_voice()
-        _sync_session_id_to_browser()
-    except Exception:
-        ui.notify("Voice processing ", type="positive")
+
     ui.run_javascript(
         """
         if (!window._mediaRecorder) return;
@@ -482,6 +570,19 @@ async def _stop_recording() -> None:
             const arrayBuffer = await blob.arrayBuffer();
             const bytes = Array.from(new Uint8Array(arrayBuffer));
 
+            // Create audio URL for displaying user's recorded message
+            const audioUrl = URL.createObjectURL(blob);
+            
+            // Add user's audio message to chat
+            await fetch('/_nicegui_internal/add_user_audio', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    audio_url: audioUrl,
+                    audio_bytes: bytes
+                })
+            });
+
             const res = await fetch('/_nicegui_api/send_voice', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -493,8 +594,6 @@ async def _stop_recording() -> None:
             if (data.session_id) {
                 sessionStorage.setItem('session_id', data.session_id);
             }
-
-            
 
             //  PLAY AUDIO USING HTML <audio> ELEMENT
             if (data.audio_base64) {
@@ -537,6 +636,9 @@ async def send_voice(audio_array: list[int]) -> dict:
 
     audio_bytes = bytes(audio_array)
 
+    # Show typing indicator while processing voice
+    _show_typing_indicator()
+
     try:
         result = await asyncio.to_thread(
             send_ai_interaction,
@@ -546,6 +648,18 @@ async def send_voice(audio_array: list[int]) -> dict:
             response_mode="voice",
             audio_bytes=audio_bytes,
         )
+
+        # Hide typing indicator before rendering response
+        _hide_typing_indicator()
+
+        # Check if backend returned consent error
+        if result.get("error") and "consent" in result.get("error", "").lower():
+            ui.notify(
+                "Voice processing is disabled. Enable it in consent settings.",
+                type="warning",
+            )
+            return result
+
         _handle_ai_response(result)
 
         state.session_id = result.get(
@@ -556,8 +670,18 @@ async def send_voice(audio_array: list[int]) -> dict:
         logger.info("Voice interaction processed successfully")
         return result
 
-    except Exception:
+    except Exception as e:
+        _hide_typing_indicator()
         logger.exception("Voice interaction failed")
+
+        # Check if it's a consent-related error
+        error_msg = str(e)
+        if "consent" in error_msg.lower() or "disabled" in error_msg.lower():
+            ui.notify(
+                "Voice processing is disabled. Enable it in consent settings.",
+                type="warning",
+            )
+
         return {
             "error": "Failed to process voice input",
         }
@@ -788,6 +912,9 @@ async def _send_text(text: str) -> None:
         ui.notify("You are not authenticated", type="negative")
         return
 
+    # Show typing indicator
+    _show_typing_indicator()
+
     try:
         response = await asyncio.to_thread(
             send_ai_interaction,
@@ -797,6 +924,10 @@ async def _send_text(text: str) -> None:
             text=text,
             response_mode="text",
         )
+
+        # Hide typing indicator before showing response
+        _hide_typing_indicator()
+
         _handle_ai_response(response)
 
         state.session_id = response.get(
@@ -815,6 +946,7 @@ async def _send_text(text: str) -> None:
             _add_ai(message)
 
     except Exception:
+        _hide_typing_indicator()
         logger.exception("Failed to send text message")
         ui.notify(
             "Failed to send message. Please try again.",
@@ -839,6 +971,9 @@ async def _send_file() -> None:
         ui.notify("You are not authenticated", type="negative")
         return
 
+    # Show typing indicator
+    _show_typing_indicator()
+
     try:
         response = await asyncio.to_thread(
             send_ai_interaction,
@@ -848,6 +983,15 @@ async def _send_file() -> None:
             image_type=CURRENT_IMAGE_TYPE,
             file_bytes=PENDING_FILE_BYTES,
         )
+
+        # Hide typing indicator before showing response
+        _hide_typing_indicator()
+
+        # Check for consent errors from backend
+        if response.get("message") and "consent" in response.get("message", "").lower():
+            ui.notify(response.get("message"), type="warning")
+            return
+
         _handle_ai_response(response)
 
         state.session_id = response.get(
@@ -870,12 +1014,22 @@ async def _send_file() -> None:
         if disclaimer:
             _add_ai(f"⚠️ {disclaimer}")
 
-    except Exception:
+    except Exception as e:
+        _hide_typing_indicator()
         logger.exception("Failed to send file")
-        ui.notify(
-            "Failed to send file. Please try again.",
-            type="negative",
-        )
+
+        # Check if it's a consent-related error
+        error_msg = str(e)
+        if "consent" in error_msg.lower() or "disabled" in error_msg.lower():
+            ui.notify(
+                "Image/document processing is disabled. Enable it in consent settings.",
+                type="warning",
+            )
+        else:
+            ui.notify(
+                "Failed to send file. Please try again.",
+                type="negative",
+            )
 
     finally:
         PENDING_FILE_BYTES = None

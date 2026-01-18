@@ -200,20 +200,13 @@ def _route_llm(
 ) -> Dict[str, Any]:
     CONFIRMATIONS = {"yes", "yes.", "ok", "okay", "okay.", "sure"}
 
-    SAFE_ACTION_FALLBACK = (
-        "That is okay. Let us start gently. "
-        "Take a slow breath in through your nose. "
-        "Let it out slowly through your mouth. "
-        "Relax your shoulders as you sit. "
-        "Would you like to continue with another calming step?"
-    )
-
     if normalized_text.strip().lower() in CONFIRMATIONS:
-        return {
-            "intent": "self-care",
-            "severity": "informational",
-            "response_text": SAFE_ACTION_FALLBACK,
-        }
+        logger.info("User confirmed. Continuing self-care actions.")
+        return analyze_health_text(
+            text="Please give me some gentle self-care steps.",
+            user_id=user_id,
+            mode="self_care",
+        )
 
     # ==========================================================
     # CONTEXT-AWARE HEALTH GATE (MODEL-CORRECT)
@@ -263,6 +256,16 @@ def _route_llm(
             user_id=user_id,
             mode="support",
         )
+    # ==========================================================
+    # EXPLICIT SELF-CARE OVERRIDE (ALWAYS WINS)
+    # ==========================================================
+    if _asks_for_self_care(normalized_text):
+        logger.info("Explicit self-care detected. Forcing self_care mode.")
+        return analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+            mode="self_care",
+        )
 
     # ==========================================================
     # INTENT-DRIVEN HEALTH
@@ -298,15 +301,25 @@ def _route_llm(
 
 def _asks_for_self_care(text: str) -> bool:
     """Check if the user asks for self-care guidance."""
+    text = text.lower()
     triggers = {
         "self care",
         "self-care",
+        "tips",
+        "suggest",
+        "what can i do",
+        "how can i",
+        "how to feel better",
+        "not feeling well",
+        "feel better",
+        "help me feel",
         "improve my health",
         "stay healthy",
         "healthy habits",
-        "how can i improve",
+        "routine",
+        "coping",
     }
-    return any(t in text.lower() for t in triggers)
+    return any(t in text for t in triggers)
 
 
 def _is_health_query(text: str) -> bool:
@@ -329,6 +342,13 @@ def _is_health_query(text: str) -> bool:
         "panic",
         "fear",
         "stress",
+        "tired",
+        "fatigue",
+        "low energy",
+        "unwell",
+        "feeling well",
+        "burnout",
+        "overwhelmed",
         # body awareness
         "body",
         "sensations",
