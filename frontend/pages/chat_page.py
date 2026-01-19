@@ -72,29 +72,49 @@ def _create_typing_indicator():
 def _show_typing_indicator():
     """
     Show the typing indicator in the chat container.
+    Must be called from within CHAT_CONTAINER context.
     """
     global TYPING_INDICATOR
 
-    if CHAT_CONTAINER and TYPING_INDICATOR is None:
-        with CHAT_CONTAINER:
-            TYPING_INDICATOR = ui.column().classes("w-full")
-            with TYPING_INDICATOR:
-                _create_typing_indicator()
+    if TYPING_INDICATOR is None:
+        TYPING_INDICATOR = ui.column().classes("w-full")
+        with TYPING_INDICATOR:
+            _create_typing_indicator()
 
-        _scroll_to_bottom()
+        #  Scroll happens in the same context
+        ui.run_javascript(
+            """
+            setTimeout(() => {
+                const el = document.querySelector('.chat-scroll');
+                if (el) {
+                    el.scrollTo({
+                        top: el.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                }
+            }, 50);
+            """
+        )
         logger.debug("Typing indicator shown")
 
 
 def _hide_typing_indicator():
     """
     Remove the typing indicator from the chat container.
+    Must be called from within CHAT_CONTAINER context.
     """
     global TYPING_INDICATOR
 
     if TYPING_INDICATOR:
-        TYPING_INDICATOR.clear()
-        TYPING_INDICATOR.delete()
-        TYPING_INDICATOR = None
+        try:
+            TYPING_INDICATOR.clear()
+            TYPING_INDICATOR.delete()
+        except (ValueError, RuntimeError) as e:
+            # Element already removed or not in parent's children list
+            logger.debug(f"Typing indicator already removed: {e}")
+        finally:
+            TYPING_INDICATOR = None
+
         logger.debug("Typing indicator hidden")
 
 
@@ -211,15 +231,63 @@ def load_history_ui() -> dict:
 # =================================================
 # INTERNAL ENDPOINTS
 # =================================================
+def _add_user(text: str) -> None:
+    """
+    Render a user message in the chat UI and store it.
 
+    Args:
+        text: User message text.
+    """
+    logger.debug("Rendering user message")
+    msg = {
+        "author": "You",
+        "text": text,
+        "sent": True,
+        "type": "text",
+    }
 
-@app.post("/_nicegui_internal/add_ai")
-async def add_ai(payload: dict) -> dict:
-    text = payload.get("text")
-    if text and CHAT_CONTAINER:
+    state.messages.append(msg)
+
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:  # ✅ Ensure slot context
+            _render_message(msg, CHAT_CONTAINER)
+
+    _store_message_js(msg)
+
+    # ✅ Scroll in slot context
+    if CHAT_CONTAINER:
         with CHAT_CONTAINER:
-            _add_ai(text)
-    return {"ok": True}
+            _scroll_to_bottom()
+
+
+def _add_ai(text: str) -> None:
+    """
+    Render an AI message in the chat UI and store it.
+
+    Args:
+        text: AI-generated message text.
+    """
+    logger.debug("Rendering AI message")
+
+    msg = {
+        "author": "Curamyn",
+        "text": text,
+        "sent": False,
+        "type": "text",
+    }
+
+    state.messages.append(msg)
+
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:  #  Ensure slot context
+            _render_message(msg, CHAT_CONTAINER)
+
+    _store_message_js(msg)
+
+    #  Scroll in slot context
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            _scroll_to_bottom()
 
 
 @app.post("/_nicegui_internal/add_user_audio")
@@ -636,8 +704,10 @@ async def send_voice(audio_array: list[int]) -> dict:
 
     audio_bytes = bytes(audio_array)
 
-    # Show typing indicator while processing voice
-    _show_typing_indicator()
+    #  Show typing indicator INSIDE the UI slot context
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            _show_typing_indicator()
 
     try:
         result = await asyncio.to_thread(
@@ -649,8 +719,10 @@ async def send_voice(audio_array: list[int]) -> dict:
             audio_bytes=audio_bytes,
         )
 
-        # Hide typing indicator before rendering response
-        _hide_typing_indicator()
+        #  Hide typing indicator INSIDE the UI slot context
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
 
         # Check if backend returned consent error
         if result.get("error") and "consent" in result.get("error", "").lower():
@@ -660,7 +732,10 @@ async def send_voice(audio_array: list[int]) -> dict:
             )
             return result
 
-        _handle_ai_response(result)
+        #  Handle AI response INSIDE the UI slot context
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _handle_ai_response(result)
 
         state.session_id = result.get(
             "session_id",
@@ -671,7 +746,11 @@ async def send_voice(audio_array: list[int]) -> dict:
         return result
 
     except Exception as e:
-        _hide_typing_indicator()
+        #  Hide typing indicator on error INSIDE the UI slot context
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
+
         logger.exception("Voice interaction failed")
 
         # Check if it's a consent-related error
@@ -913,7 +992,9 @@ async def _send_text(text: str) -> None:
         return
 
     # Show typing indicator
-    _show_typing_indicator()
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            _show_typing_indicator()
 
     try:
         response = await asyncio.to_thread(
@@ -926,27 +1007,37 @@ async def _send_text(text: str) -> None:
         )
 
         # Hide typing indicator before showing response
-        _hide_typing_indicator()
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
 
-        _handle_ai_response(response)
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _handle_ai_response(response)
 
         state.session_id = response.get(
             "session_id",
             state.session_id,
         )
+
         if state.session_id:
             ui.run_javascript(
                 f"""
-        sessionStorage.setItem('session_id', '{state.session_id}');
-        """
+                sessionStorage.setItem('session_id', '{state.session_id}');
+                """
             )
 
         message = response.get("message")
         if message:
-            _add_ai(message)
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    _add_ai(message)
 
     except Exception:
-        _hide_typing_indicator()
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
+
         logger.exception("Failed to send text message")
         ui.notify(
             "Failed to send message. Please try again.",
@@ -971,8 +1062,33 @@ async def _send_file() -> None:
         ui.notify("You are not authenticated", type="negative")
         return
 
+    # ✅ CHECK CONSENT BEFORE SENDING
+    if CURRENT_IMAGE_TYPE == "document":
+        if not state.consent.get("document", False):
+            ui.notify(
+                "Document processing is disabled. Enable it in consent settings.",
+                type="warning",
+            )
+            PENDING_FILE_BYTES = None
+            if UPLOAD_WIDGET:
+                UPLOAD_WIDGET.reset()
+            return
+    else:
+        # For images (xray, skin)
+        if not state.consent.get("image", False):
+            ui.notify(
+                "Image processing is disabled. Enable it in consent settings.",
+                type="warning",
+            )
+            PENDING_FILE_BYTES = None
+            if UPLOAD_WIDGET:
+                UPLOAD_WIDGET.reset()
+            return
+
     # Show typing indicator
-    _show_typing_indicator()
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            _show_typing_indicator()
 
     try:
         response = await asyncio.to_thread(
@@ -985,14 +1101,21 @@ async def _send_file() -> None:
         )
 
         # Hide typing indicator before showing response
-        _hide_typing_indicator()
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
 
-        # Check for consent errors from backend
-        if response.get("message") and "consent" in response.get("message", "").lower():
-            ui.notify(response.get("message"), type="warning")
-            return
+        # ✅ Check for consent errors from backend (backup check)
+        if response.get("message"):
+            msg_lower = response.get("message", "").lower()
+            if "consent" in msg_lower or "disabled" in msg_lower:
+                ui.notify(response.get("message"), type="warning")
+                return
 
-        _handle_ai_response(response)
+        # Handle AI response
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _handle_ai_response(response)
 
         state.session_id = response.get(
             "session_id",
@@ -1002,20 +1125,28 @@ async def _send_file() -> None:
         if state.session_id:
             ui.run_javascript(
                 f"""
-        sessionStorage.setItem('session_id', '{state.session_id}');
-        """
+                sessionStorage.setItem('session_id', '{state.session_id}');
+                """
             )
 
         text = response.get("response_text") or response.get("message")
         disclaimer = response.get("disclaimer")
 
         if text:
-            _add_ai(text)
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    _add_ai(text)
         if disclaimer:
-            _add_ai(f"⚠️ {disclaimer}")
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    _add_ai(f"⚠️ {disclaimer}")
 
     except Exception as e:
-        _hide_typing_indicator()
+        # ✅ Safe cleanup on error
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _hide_typing_indicator()
+
         logger.exception("Failed to send file")
 
         # Check if it's a consent-related error
@@ -1040,53 +1171,6 @@ async def _send_file() -> None:
 # =================================================
 # CHAT UI + BROWSER SESSION STORAGE
 # =================================================
-def _add_user(text: str) -> None:
-    """
-    Render a user message in the chat UI and store it.
-
-    Args:
-        text: User message text.
-    """
-    logger.debug("Rendering user message")
-    msg = {
-        "author": "You",
-        "text": text,
-        "sent": True,
-        "type": "text",
-    }
-
-    state.messages.append(msg)
-
-    if CHAT_CONTAINER:
-        _render_message(msg, CHAT_CONTAINER)
-
-    _store_message_js(msg)
-    _scroll_to_bottom()
-
-
-def _add_ai(text: str) -> None:
-    """
-    Render an AI message in the chat UI and store it.
-
-    Args:
-        text: AI-generated message text.
-    """
-    logger.debug("Rendering AI message")
-
-    msg = {
-        "author": "Curamyn",
-        "text": text,
-        "sent": False,
-        "type": "text",
-    }
-
-    state.messages.append(msg)
-
-    if CHAT_CONTAINER:
-        _render_message(msg, CHAT_CONTAINER)
-
-    _store_message_js(msg)
-    _scroll_to_bottom()
 
 
 def _render_message(message: dict, container) -> None:

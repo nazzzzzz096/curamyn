@@ -19,7 +19,6 @@ from app.chat_service.services.voice_pipeline_service import voice_chat_pipeline
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.health_advisor_service import analyze_health_text
 from app.chat_service.services.ocr_llm_service import analyze_ocr_text
-from app.chat_service.services.intent_classifier import classify_intent_llm
 from app.chat_service.services.context_agent.context_agent import ContextAgent
 from app.chat_service.services.safety_guard import (
     check_input_safety,
@@ -198,32 +197,6 @@ def _route_llm(
     context: Dict[str, Any],
     user_id: str | None,
 ) -> Dict[str, Any]:
-    CONFIRMATIONS = {"yes", "yes.", "ok", "okay", "okay.", "sure"}
-
-    if normalized_text.strip().lower() in CONFIRMATIONS:
-        logger.info("User confirmed. Continuing self-care actions.")
-        return analyze_health_text(
-            text="Please give me some gentle self-care steps.",
-            user_id=user_id,
-            mode="self_care",
-        )
-
-    # ==========================================================
-    # CONTEXT-AWARE HEALTH GATE (MODEL-CORRECT)
-    # ==========================================================
-    if (
-        not _is_health_query(normalized_text)
-        and not _asks_for_self_care(normalized_text)
-        and not state.has_health_context
-    ):
-        return {
-            "response_text": (
-                "I'm here to help with health-related questions only. "
-                "Please ask about symptoms, wellness, or self-care."
-            ),
-            "intent": "refusal",
-            "severity": "low",
-        }
 
     # ==========================================================
     # AUDIO
@@ -238,7 +211,7 @@ def _route_llm(
         return analyze_ocr_text(text=normalized_text, user_id=user_id)
 
     # ==========================================================
-    # MEDICAL IMAGE
+    # IMAGE (NON-OCR)
     # ==========================================================
     if input_type == "image":
         return {
@@ -247,116 +220,9 @@ def _route_llm(
         }
 
     # ==========================================================
-    # FOLLOW-UP AFTER IMAGE
-    # ==========================================================
-    if state.last_image_analysis:
-        return analyze_health_text(
-            text=normalized_text,
-            image_context=state.last_image_analysis,
-            user_id=user_id,
-            mode="support",
-        )
-    # ==========================================================
-    # EXPLICIT SELF-CARE OVERRIDE (ALWAYS WINS)
-    # ==========================================================
-    if _asks_for_self_care(normalized_text):
-        logger.info("Explicit self-care detected. Forcing self_care mode.")
-        return analyze_health_text(
-            text=normalized_text,
-            user_id=user_id,
-            mode="self_care",
-        )
-
-    # ==========================================================
-    # INTENT-DRIVEN HEALTH
-    # ==========================================================
-    intent = classify_intent_llm(normalized_text)
-    # ==========================================================
-    # CONTEXT-AWARE HEALTH GATE
-    # ==========================================================
-
-    if intent == "self_care":
-        return analyze_health_text(
-            text=normalized_text,
-            user_id=user_id,
-            mode="self_care",
-        )
-
-    if intent == "health_support":
-        return analyze_health_text(
-            text=normalized_text,
-            user_id=user_id,
-            mode="support",
-        )
-
-    # ==========================================================
-    # DEFAULT (SAFE HEALTH CONTINUATION)
+    # HEALTH TEXT (SINGLE PROMPT — ALWAYS)
     # ==========================================================
     return analyze_health_text(
         text=normalized_text,
         user_id=user_id,
-        mode="support",
     )
-
-
-def _asks_for_self_care(text: str) -> bool:
-    """Check if the user asks for self-care guidance."""
-    text = text.lower()
-    triggers = {
-        "self care",
-        "self-care",
-        "tips",
-        "suggest",
-        "what can i do",
-        "how can i",
-        "how to feel better",
-        "not feeling well",
-        "feel better",
-        "help me feel",
-        "improve my health",
-        "stay healthy",
-        "healthy habits",
-        "routine",
-        "coping",
-    }
-    return any(t in text for t in triggers)
-
-
-def _is_health_query(text: str) -> bool:
-    """Check if the query relates to health symptoms."""
-
-    health_triggers = {
-        # symptoms
-        "pain",
-        "ache",
-        "aches",
-        "dizzy",
-        "nausea",
-        "fever",
-        # anxiety & mental health
-        "anxious",
-        "anxiety",
-        "uneasy",
-        "worried",
-        "overthinking",
-        "panic",
-        "fear",
-        "stress",
-        "tired",
-        "fatigue",
-        "low energy",
-        "unwell",
-        "feeling well",
-        "burnout",
-        "overwhelmed",
-        # body awareness
-        "body",
-        "sensations",
-        "symptom",
-        "symptoms",
-        # general health words
-        "health",
-        "wellbeing",
-        "well-being",
-    }
-    return any(t in text.lower() for t in health_triggers)

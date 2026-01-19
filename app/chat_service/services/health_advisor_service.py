@@ -1,7 +1,8 @@
 """
 Health advisor LLM service.
 
-Provides supportive, non-diagnostic health guidance.
+Provides supportive, non-diagnostic health guidance
+using a single prompt strategy.
 """
 
 import os
@@ -15,16 +16,15 @@ from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
 
-MODEL_NAME = "models/gemini-flash-latest"
+PRIMARY_MODEL = "models/gemini-flash-latest"
+FALLBACK_MODEL = "models/gemini-flash-lite-latest"
 
 
 # ==================================================
 # SAFE LAZY GEMINI LOADER
 # ==================================================
 def _load_gemini():
-    """
-    Load Gemini client safely (disabled in tests).
-    """
+    """Load Gemini client safely (disabled in tests)."""
     if os.getenv("CURAMYN_ENV") == "test":
         return None, None
 
@@ -50,230 +50,243 @@ def analyze_health_text(
     *,
     text: str,
     user_id: str | None = None,
-    mode: str = "support",
     image_context: dict | None = None,
 ) -> dict:
     """
     Health advisor LLM.
 
-    Modes:
-    - support: anxiety support and reassurance
-    - self_care: practical self-care steps
+    Uses a single prompt that decides internally whether to:
+    - provide reassurance
+    - provide self-care steps
 
-    Returns safe, non-diagnostic, anxiety-aware responses.
+    Includes minimal MLflow observability.
     """
 
     client, GenerateContentConfig = _load_gemini()
 
-    SAFE_SUPPORT_FALLBACK = (
+    SAFE_FALLBACK = (
         "I am here with you. "
         "Let us take this one step at a time. "
-        "Would you like something gentle you can do right now?"
+        "You do not have to handle this alone."
     )
-
-    # ---------- HARD FALLBACK (NO LLM) ----------
-    if client is None:
-        logger.error(
-            "LLM client unavailable | ENV=%s | GEMINI_API_KEY=%s",
-            os.getenv("CURAMYN_ENV"),
-            "SET" if os.getenv("CURAMYN_GEMINI_API_KEY") else "MISSING",
-        )
+    # response to acknowledgement
+    if _is_acknowledgement(text):
+        logger.info("User acknowledgement detected — minimal response")
         return {
             "intent": "health_support",
             "severity": "informational",
-            "response_text": SAFE_SUPPORT_FALLBACK,
+            "response_text": "I’m here with you. Let me know if you need anything.",
+        }
+    # closure of the conversation
+    if _is_closure(text):
+        logger.info("Conversation closure detected — stopping guidance")
+        return {
+            "intent": "health_support",
+            "severity": "informational",
+            "response_text": "I’m really glad to hear that. Take care, and I’m here if you need me again.",
+        }
+
+    # ---------- HARD FALLBACK ----------
+    if client is None:
+        logger.error("LLM client unavailable")
+        return {
+            "intent": "health_support",
+            "severity": "informational",
+            "response_text": SAFE_FALLBACK,
         }
 
     start_time = time.time()
+    wants_steps = any(
+        t in text.lower() for t in ["tip", "tips", "suggest", "what can i do", "help"]
+    )
+
+    prompt = _build_prompt(text, wants_steps)
+
+    answer = ""
+    model_used = None
 
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "health_advisor_llm")
-        if user_id:
-            mlflow_safe(mlflow.set_tag, "user_id", user_id)
 
-        prompt = _build_prompt(text, mode)
-
+        # ---------- PRIMARY MODEL ----------
         try:
             response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt,
+                model=PRIMARY_MODEL,
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
                 config=GenerateContentConfig(
-                    temperature=0.6,
-                    max_output_tokens=400,
+                    temperature=0.7,
+                    max_output_tokens=900,
                     top_p=0.9,
                 ),
             )
 
-            answer = (_extract_text(response) or "").strip()
-            logger.info("LLM_RESPONSE_RECEIVED | length=%s", len(answer))
+            candidate = (_extract_text(response) or "").strip()
 
-        except Exception:
-            logger.exception("Health advisor LLM failed")
-            answer = ""
+            if candidate:
+                answer = candidate
+                model_used = PRIMARY_MODEL
+                logger.info("Primary model accepted | length=%s", len(answer))
+            else:
+                logger.warning("Primary model returned empty text")
 
-        # ---------- EMPTY OUTPUT HANDLING ----------
+        except Exception as exc:
+            logger.warning("Primary model failed: %s", exc)
+
+        # ---------- FALLBACK MODEL ----------
         if not answer:
-            logger.warning(
-                "LLM_EMPTY_OUTPUT | mode=%s | using_safe_fallback",
-                mode,
-            )
-            answer = SAFE_SUPPORT_FALLBACK
+            try:
+                response = client.models.generate_content(
+                    model=FALLBACK_MODEL,
+                    contents=[
+                        {
+                            "role": "user",
+                            "parts": [{"text": prompt}],
+                        }
+                    ],
+                    config=GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=900,
+                        top_p=0.9,
+                    ),
+                )
 
+                candidate = (_extract_text(response) or "").strip()
+
+                if candidate:
+                    answer = candidate
+                    model_used = PRIMARY_MODEL
+                    logger.info("Primary model accepted | length=%s", len(answer))
+                else:
+                    logger.warning("Primary model returned empty text")
+
+            except Exception as exc:
+                logger.exception("Fallback model failed")
+
+        # ---------- FINAL SAFETY ----------
+        if not answer:
+            logger.warning("LLM returned empty output — using SAFE_FALLBACK")
+            answer = SAFE_FALLBACK
+            model_used = "safe_fallback"
+
+        # ---------- MLFLOW METRICS ----------
         latency = time.time() - start_time
-
-        mlflow_safe(mlflow.log_param, "model", MODEL_NAME)
-        mlflow_safe(
-            mlflow.log_param,
-            "input_hash",
-            hashlib.sha256(text.encode()).hexdigest(),
-        )
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
-        mlflow_safe(mlflow.set_tag, "status", "success")
+        mlflow_safe(mlflow.log_metric, "response_length", len(answer))
+        mlflow_safe(mlflow.set_tag, "model_used", model_used)
 
-        return {
-            "intent": "self-care" if mode == "self_care" else "health_support",
-            "severity": "informational",
-            "response_text": answer,
-        }
+    return {
+        "intent": "health_support",
+        "severity": "informational",
+        "response_text": answer,
+    }
 
 
 # ==================================================
-# PROMPT BUILDER
+# PROMPT BUILDER (SINGLE PROMPT)
 # ==================================================
-
-
-def _build_prompt(text: str, mode: str) -> str:
-    if mode == "self_care":
-        return f"""
-You are Curamyn, a calm and supportive self-care assistant.
-
-PRIMARY GOAL:
-- Provide practical, gentle self-care actions.
-- Help with daily routines, energy, focus, sleep, stress, and emotional balance.
-- Reduce overwhelm through small, doable steps.
-
-
-
-SUPPORT-FIRST RULE (CRITICAL):
-- Respond with understanding before giving advice.
-- Never sound strict, dismissive, or clinical.
-- Continue the conversation gently rather than refusing.
-- WHEN the user asks for tips, suggestions, or ways to improve,
-- YOU MUST provide clear, actionable self-care guidance.
-- Do not respond with empathy alone.
-
-
-SAFETY RULES:
-- NEVER diagnose medical or mental health conditions.
-- NEVER mention medications, supplements, or treatments.
-- NEVER promise results or certainty.
-- NEVER use clinical or alarming language.
-- NEVER leave sentences unfinished.
-
-RESPONSE STRUCTURE (STRICT):
-1. One short, empathetic sentence.
-2. A list of 3–5 specific self-care steps the user can do today.
-3. One gentle follow-up question AFTER the steps.
-
-ACTION QUALITY RULES:
-- Steps must be specific and physical or behavioral.
-- Avoid abstract advice like “relax” or “redirect attention”.
-- Explain how to perform each step briefly.
-
-STYLE:
-- Calm
-- Grounded
-- Human
-- Supportive
-- Simple sentences
-
-USER MESSAGE:
-{text}
-
-Respond following ALL rules above.
-"""
+def _build_prompt(text: str, wants_steps: bool) -> str:
+    mode = (
+        "Provide 3–5 gentle, practical self-care steps."
+        if wants_steps
+        else "Provide calm reassurance and supportive presence."
+    )
 
     return f"""
-    
-You are Curamyn, a calm and reassuring health anxiety support companion.
+You are Curamyn, a calm and supportive wellbeing assistant.
 
-PRIMARY GOAL:
-- Reduce health-related worry.
-- Provide emotional reassurance without dismissing feelings.
-- Keep the user grounded and calm.
+IMPORTANT:
+- You must always respond.
+- Never return an empty answer.
+- If unsure, provide simple grounding support.
 
-<<<<<<< HEAD
-SUPPORT-FIRST RULE (CRITICAL):
-- Lead with reassurance and understanding.
-- Do NOT jump into advice unless the user asks for help or tips.
-- Stay emotionally present.
-=======
-SUPPORT-FIRST PRIORITY (MOST IMPORTANT):
-- Calm the user before giving guidance.
-- When unsure, choose reassurance instead of refusal.
-- Never abruptly stop or redirect a health-related conversation.
-- WHEN the user asks for tips, suggestions, or ways to improve,
-- YOU MUST provide clear, actionable self-care guidance.
-- Do not respond with empathy alone.
->>>>>>> 5311d31de79151aee74439892ee4f98a3abbd54e
+Your task:
+{mode}
 
-WHEN TO GIVE ACTIONS:
-ONLY give self-care steps if the user:
-- asks for help
-- asks “what can I do” or “how do I handle this”
-- requests tips, routines, or coping strategies
+Guidelines:
+- Do not diagnose conditions.
+- Do not name medicines or treatments.
+- Avoid alarming or clinical language.
+- Focus on general wellbeing and comfort.
 
-If actions are requested:
-- You MUST provide 2–4 gentle, concrete self-care steps.
-- Do NOT give reassurance instead of actions.
+Response style:
+- One short empathetic sentence.
+- If steps are requested, list them clearly.
+- Simple, human, calm tone.
 
-SAFETY RULES:
-- NEVER diagnose conditions.
-- NEVER name medications, supplements, or treatments.
-- NEVER provide medical certainty or predictions.
-- NEVER promise outcomes.
-- NEVER sound clinical or alarming.
-
-RESPONSE STRUCTURE:
-If reassurance only:
-1. One empathetic sentence.
-2. One or two calming reflections.
-3. One soft follow-up question.
-
-If actions are requested:
-1. One empathetic sentence.
-2. A short list of concrete self-care steps.
-3. One gentle follow-up question.
-
-STYLE:
-- Warm
-- Reassuring
-- Human
-- Non-alarming
-- Clear sentence endings
-
-USER MESSAGE:
+User message:
 {text}
 
-Respond as Curamyn following ALL rules above.
+Respond now.
 """
 
 
+# ==================================================
+# RESPONSE TEXT EXTRACTION
+# ==================================================
 def _extract_text(response) -> str:
-    if not response:
+    """
+    Safely extract text from Gemini responses.
+
+    Handles multiple Gemini response formats.
+    """
+    if response is None:
         return ""
 
+    # Preferred: candidates -> content -> parts -> text
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+
+            parts = getattr(content, "parts", None)
+            if parts:
+                for part in parts:
+                    text = getattr(part, "text", None)
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+
+    # Fallback: response.text (sometimes None in Flash)
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         return text.strip()
 
-    candidates = getattr(response, "candidates", None)
-    if candidates:
-        for c in candidates:
-            content = getattr(c, "content", None)
-            parts = getattr(content, "parts", None)
-            if parts:
-                for p in parts:
-                    if hasattr(p, "text") and p.text:
-                        return p.text.strip()
     return ""
+
+
+def _is_acknowledgement(text: str) -> bool:
+    return text.strip().lower() in {
+        "ok",
+        "okay",
+        "thanks",
+        "thank you",
+        "got it",
+        "fine",
+        "alright",
+        "hmm",
+        "huh",
+    }
+
+
+def _is_closure(text: str) -> bool:
+    text = text.strip().lower()
+    return any(
+        phrase in text
+        for phrase in [
+            "i feel good",
+            "feels good now",
+            "i am fine",
+            "i feel better",
+            "thank you",
+            "thanks",
+            "appreciate it",
+            "that helped",
+            "i'm okay now",
+        ]
+    )

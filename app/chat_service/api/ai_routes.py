@@ -3,12 +3,17 @@ AI interaction API routes.
 
 Handles multimodal AI interactions (text, voice, image)
 through a unified orchestration pipeline.
+
+Responsibilities:
+- Input validation
+- Orchestration delegation
+- Safe persistence of chat history
 """
 
 import uuid
-from typing import Optional
-from datetime import datetime, timezone
 import base64
+from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -34,11 +39,6 @@ ALLOWED_INPUT_TYPES = {"text", "audio", "image"}
 ALLOWED_RESPONSE_MODES = {"text", "voice"}
 
 
-# ======================================================
-# ROUTES
-# ======================================================
-
-
 @router.post("/interact")
 async def ai_interact(
     input_type: str = Form(...),
@@ -48,43 +48,48 @@ async def ai_interact(
     image_type: Optional[str] = Form(None),
     audio: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
-    user: dict = Depends(get_current_user),
-) -> dict:
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
-    Handle multimodal AI interaction and persist chat history.
+    Handle a multimodal AI interaction and persist chat history.
 
-    - Generates session_id if missing
-    - Runs orchestration pipeline
-    - Stores user + AI messages in MongoDB
+    Flow:
+    - Validate input
+    - Generate session ID if missing
+    - Run orchestration pipeline
+    - Persist user and AI messages
     """
+
     user_id = user["sub"]
+    session_id = session_id or str(uuid.uuid4())
 
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    # ---------- Validation ----------
+    # -----------------------------
+    # VALIDATION
+    # -----------------------------
     if input_type not in ALLOWED_INPUT_TYPES:
         raise HTTPException(status_code=400, detail="Invalid input_type")
 
     if response_mode not in ALLOWED_RESPONSE_MODES:
         raise HTTPException(status_code=400, detail="Invalid response_mode")
 
-    if input_type == "audio":
-        if not audio:
-            raise HTTPException(status_code=400, detail="Audio file required")
-        response_mode = "voice"
-
     if input_type == "text" and not text:
         raise HTTPException(status_code=400, detail="Text input required")
+
+    if input_type == "audio" and not audio:
+        raise HTTPException(status_code=400, detail="Audio file required")
 
     if input_type == "image" and not image:
         raise HTTPException(status_code=400, detail="Image file required")
 
-    # ---------- Read files ----------
+    # -----------------------------
+    # READ FILES
+    # -----------------------------
     audio_bytes = await audio.read() if audio else None
     image_bytes = await image.read() if image else None
 
-    # ---------- Run AI ----------
+    # -----------------------------
+    # RUN ORCHESTRATION
+    # -----------------------------
     result = await run_interaction(
         input_type=input_type,
         session_id=session_id,
@@ -105,11 +110,15 @@ async def ai_interact(
         },
     )
 
-    # ---------- Persist Chat ----------
+    # -----------------------------
+    # PERSIST CHAT MESSAGES
+    # -----------------------------
     try:
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        # -------- USER MESSAGE --------
+        # TODO: Enforce consent flags before storing audio/image data
+
+        # ----- USER MESSAGE -----
         if input_type == "text":
             append_chat_message(
                 user_id=user_id,
@@ -123,7 +132,7 @@ async def ai_interact(
                 },
             )
 
-        elif input_type == "image":
+        elif input_type == "image" and image_bytes:
             encoded_image = base64.b64encode(image_bytes).decode("utf-8")
             append_chat_message(
                 user_id=user_id,
@@ -138,7 +147,7 @@ async def ai_interact(
                 },
             )
 
-        elif input_type == "audio":
+        elif input_type == "audio" and audio_bytes:
             encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
             append_chat_message(
                 user_id=user_id,
@@ -153,21 +162,22 @@ async def ai_interact(
                 },
             )
 
-        # -------- AI MESSAGE (TEXT) --------
-        if result.get("message"):
+        # ----- AI MESSAGE (TEXT) -----
+        ai_message = result.get("message")
+        if ai_message and ai_message.strip():
             append_chat_message(
                 user_id=user_id,
                 session_id=session_id,
                 message={
                     "author": "Curamyn",
                     "type": "text",
-                    "text": result["message"],
+                    "text": ai_message,
                     "sent": False,
                     "timestamp": timestamp,
                 },
             )
 
-        # -------- AI MESSAGE (AUDIO, optional) --------
+        # ----- AI MESSAGE (AUDIO, OPTIONAL) -----
         if result.get("audio_base64"):
             append_chat_message(
                 user_id=user_id,
@@ -183,7 +193,11 @@ async def ai_interact(
             )
 
         logger.info(
-            f"Chat messages stored successfully | session_id={session_id} | user_id={user_id}"
+            "Chat messages stored successfully",
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+            },
         )
 
     except Exception:

@@ -1,25 +1,34 @@
 """
 Context Agent.
 
-Builds conversation-aware input using session summaries.
+Builds conversation-aware input for the LLM using session history,
+summaries, and SAFE abstractions of onboarding data.
+
+This module intentionally avoids injecting raw medical facts
+(conditions, medications) into the LLM to prevent diagnostic behavior.
 """
 
-from typing import Optional
+from typing import List
+
 from app.chat_service.utils.logger import get_logger
 from app.chat_service.services.context_agent.summary_provider import (
     get_session_summary,
 )
 from app.chat_service.services.orchestrator.session_state import SessionState
-from app.chat_service.repositories.onboarding_repository import get_onboarding_profile
-
+from app.chat_service.repositories.onboarding_repository import (
+    get_onboarding_profile,
+)
 
 logger = get_logger(__name__)
 
 
 class ContextAgent:
     """
-    Responsible for injecting conversation continuity
-    into user input before LLM processing.
+    Injects optional, non-clinical context into LLM input.
+
+    The context is designed to improve emotional awareness and
+    conversational continuity without influencing medical reasoning
+    or diagnosis.
     """
 
     @staticmethod
@@ -31,9 +40,27 @@ class ContextAgent:
         session_id: str,
         session_state: SessionState,
     ) -> str:
+        """
+        Build conversation-aware input for the LLM.
+
+        This method merges recent conversation history, session summaries,
+        and abstracted onboarding signals to guide tone and sensitivity
+        while ensuring the response focuses on the user's current message.
+
+        Args:
+            user_input: The current user message.
+            input_type: The type of input (text, audio, image).
+            user_id: Optional unique user identifier.
+            session_id: Active session identifier.
+            session_state: Current session state containing recent context.
+
+        Returns:
+            A formatted string containing optional contextual information
+            followed by the current user message.
+        """
 
         # -------------------------------
-        # 1. SHORT-TERM CONTEXT (LIVE)
+        # 1. SHORT-TERM CONTEXT (RECENT CHAT)
         # -------------------------------
         recent_turns = session_state.last_messages[-6:]
         history_block = "\n".join(
@@ -41,70 +68,135 @@ class ContextAgent:
             for m in recent_turns
             if m.get("content")
         )
+
         # -------------------------------
-        # 2b. USER PROFILE (ONBOARDING)
+        # 2. SAFE USER AWARENESS (ONBOARDING)
         # -------------------------------
-        profile_text = ""
+        awareness_lines: List[str] = []
 
         if user_id:
-            profile = get_onboarding_profile(user_id)
+            try:
+                profile = get_onboarding_profile(user_id)
+                logger.debug(
+                    "Onboarding profile loaded",
+                    extra={"user_id": user_id},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to load onboarding profile",
+                    extra={"user_id": user_id},
+                )
+                profile = None
 
             if profile:
-                lines = []
-
                 if profile.get("emotional_baseline"):
-                    lines.append(f"Emotional baseline: {profile['emotional_baseline']}")
-
-                if profile.get("medications"):
-                    lines.append(f"Medications: {profile['medications']}")
+                    awareness_lines.append(
+                        "Respond in a calm, reassuring, and non-alarming manner."
+                    )
 
                 if profile.get("known_conditions"):
-                    lines.append(f"Known conditions: {profile['known_conditions']}")
+                    awareness_lines.append(
+                        "Avoid medical assumptions and keep guidance general."
+                    )
 
-                profile_text = "; ".join(lines)
+                if profile.get("medications"):
+                    awareness_lines.append(
+                        "Do not reference medicines or medical treatments."
+                    )
+
+                if profile.get("age_range"):
+                    awareness_lines.append(
+                        "Use clear and respectful language appropriate for adults."
+                    )
+
+                if profile.get("gender"):
+                    awareness_lines.append(
+                        "Avoid gender-based assumptions in responses."
+                    )
+
+        awareness_block = "\n".join(awareness_lines)
 
         # -------------------------------
-        # 2. LONG-TERM CONTEXT (DB)
+        # 3. LONG-TERM CONTEXT (SESSION SUMMARY)
         # -------------------------------
-        summary = None
+        summary_text = ""
         if user_id:
-            summary = get_session_summary(
-                user_id=user_id,
-                session_id=session_id,
+            try:
+                summary = get_session_summary(
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+                if summary:
+                    summary_text = summary.get("summary_text", "")
+                    logger.debug(
+                        "Session summary injected",
+                        extra={"session_id": session_id},
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to load session summary",
+                    extra={"session_id": session_id},
+                )
+
+        # -------------------------------
+        # 4. NON-MEDICAL SYSTEM HINTS
+        # -------------------------------
+        hints: List[str] = []
+
+        if session_state.last_image_analysis:
+            hints.append(
+                "The user previously shared an image related to their concern."
             )
 
-        summary_text = summary.get("summary_text") if summary else ""
-
-        # -------------------------------
-        # 3. OPTIONAL IMAGE / DOC HINTS
-        # -------------------------------
-        hints = []
-        if session_state.last_image_analysis:
-            hints.append("User previously shared a medical image.")
         if session_state.last_document_text:
-            hints.append("User previously shared a document.")
+            hints.append("The user previously shared a document.")
 
         hint_block = "\n".join(hints)
 
         # -------------------------------
-        # 4. MERGED INPUT
+        # 5. CONTEXT ASSEMBLY (ONLY IF PRESENT)
         # -------------------------------
-        if not history_block and not summary_text and not hint_block:
+        blocks: List[str] = []
+
+        if awareness_block:
+            blocks.append(f"Support considerations:\n{awareness_block}")
+
+        if history_block:
+            blocks.append(f"Conversation so far:\n{history_block}")
+
+        if summary_text:
+            blocks.append(f"Previous session summary:\n{summary_text}")
+
+        if hint_block:
+            blocks.append(f"System hints:\n{hint_block}")
+
+        if not blocks:
+            logger.debug(
+                "No context injected; returning raw user input",
+                extra={"session_id": session_id},
+            )
             return user_input
 
+        context_text = "\n\n".join(blocks)
+
+        logger.debug(
+            "Context injected into LLM input",
+            extra={
+                "session_id": session_id,
+                "context_blocks": len(blocks),
+            },
+        )
+
         return f"""
+--- OPTIONAL CONTEXT (FOR AWARENESS ONLY) ---
 
-User background (from onboarding, if relevant):
-{profile_text or "Not provided"}
+{context_text}
 
-Conversation so far:
-{history_block}
+--- END CONTEXT ---
 
-Previous session summary:
-{summary_text}
-
-System hints:
-{hint_block}
+IMPORTANT:
+Respond primarily to the CURRENT user message.
+Follow all assistant rules strictly.
 
 User message:
 {user_input}

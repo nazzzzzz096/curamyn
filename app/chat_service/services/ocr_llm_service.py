@@ -31,14 +31,13 @@ def _load_gemini():
 
     try:
         from google import genai
-        from google.generativeai.types import GenerationConfig
+        from google.genai.types import GenerateContentConfig
 
         api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
         if not api_key:
             return None, None
 
-        genai.configure(api_key=api_key)
-        return genai, GenerationConfig
+        return genai.Client(api_key=api_key), GenerateContentConfig
 
     except Exception as exc:
         logger.warning("Gemini OCR unavailable: %s", exc)
@@ -103,8 +102,8 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             logger.exception("OCR LLM call failed")
             output = ""
 
-        if not output or len(output.split(".")) < 3:
-            logger.warning("OCR LLM output too short — fallback applied")
+        if not output or not _is_useful_summary(output):
+            logger.warning("OCR summary insufficient — fallback applied")
             output = _fallback_text()
 
         latency = time.time() - start
@@ -158,19 +157,51 @@ def _is_medical_document(text: str) -> bool:
 
 
 def _build_prompt(text: str) -> str:
+    """it decides how my ocr models interprets result"""
     return f"""
-You are a medical document summarization system.
+You are a medical document summarization assistant.
 
-RULES (STRICT):
-- NO diagnosis
-- NO medical advice
-- NO interpretation
-- Professional tone only
-- Multi-sentence output required
+TASK:
+- Extract and summarize sections EXACTLY as written
+- Preserve remarks, comments, and notes
+- DO NOT interpret values
+- DO NOT diagnose
+- DO NOT say normal/abnormal unless written
+
+ALLOWED:
+- Reformat into sections
+- Bullet points
+- Clear language
+
+REQUIRED SECTIONS (if present):
+- Test name
+- Values
+- Units
+- Reference ranges
+- Remarks / Comments
 
 Document Text:
 {text}
+
+Return a structured summary.
 """
+
+
+def _is_useful_summary(text: str) -> bool:
+
+    return any(
+        k in text.lower()
+        for k in [
+            "test",
+            "value",
+            "range",
+            "remarks",
+            "hemoglobin",
+            "cbc",
+            "clinical",
+            "notes",
+        ]
+    )
 
 
 def _extract_llm_text(response) -> str:
