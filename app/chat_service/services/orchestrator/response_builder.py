@@ -39,6 +39,7 @@ def build_response(
     Returns:
         A dictionary containing the final response message.
     """
+
     try:
         image_analysis = context.get("image_analysis")
 
@@ -67,9 +68,15 @@ def build_response(
             "I am here with you.",
         )
 
+        intent = llm_result.get("intent")
         severity = llm_result.get("severity", "low")
 
-        # Normalize only for voice friendliness, not meaning
+        if intent == "document_understanding":
+            return {
+                "message": raw_text,
+            }
+
+        #  Normalize ONLY conversational responses
         final_text = normalized_response_text(raw_text, severity)
 
         return {

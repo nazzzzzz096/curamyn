@@ -10,19 +10,17 @@ from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# More specific PII patterns that won't match important medical terms
 PII_PATTERNS = [
-    r"patient\s*name.*",
-    r"patient\s*id.*",
-    r"age\s*[:=].*",
-    r"gender\s*[:=].*",
-    r"sample\s*collected.*",
-    r"report\s*generated.*",
-    r"date\s*[:=].*",
-    r"referral.*",
-    r"doctor.*",
+    r"^patient\s*name\s*[:=]",
+    r"^patient\s*id\s*[:=]",
+    r"^name\s*[:=]",
+    r"^id\s*[:=]",
+    r"^uhid\s*[:=]",
+    r"^mr\s*no\s*[:=]",
 ]
 
-_COMPILED_PII = [re.compile(p) for p in PII_PATTERNS]
+_COMPILED_PII = [re.compile(p, re.IGNORECASE) for p in PII_PATTERNS]
 
 
 def clean_ocr_text(text: str) -> str:
@@ -44,22 +42,80 @@ def clean_ocr_text(text: str) -> str:
         stripped = line.strip()
         lower = stripped.lower()
 
-        if not stripped or len(stripped) < 4:
+        # Skip empty lines
+        if not stripped:
             continue
 
-        if any(p.search(lower) for p in _COMPILED_PII):
+        # Skip lines that are too short (likely OCR noise)
+        # BUT allow short lines if they contain numbers or medical abbreviations
+        if len(stripped) < 3:
             continue
 
-        if re.fullmatch(r"[a-z\s]{1,5}", lower):
+        # Skip lines with only 1-2 characters that are just letters
+        if len(stripped) <= 2 and stripped.isalpha():
             continue
 
-        cleaned_lines.append(stripped)
+        # Check for PII patterns (only at start of line)
+        is_pii = any(p.match(lower) for p in _COMPILED_PII)
+        if is_pii:
+            logger.debug(f"Removed PII line: {stripped[:50]}")
+            continue
+
+        # Keep lines that contain medical keywords (even if short)
+        medical_keywords = [
+            "hemoglobin",
+            "hb",
+            "wbc",
+            "rbc",
+            "platelet",
+            "glucose",
+            "creatinine",
+            "urea",
+            "sodium",
+            "potassium",
+            "count",
+            "test",
+            "result",
+            "value",
+            "range",
+            "reference",
+            "unit",
+            "cbc",
+            "report",
+            "clinical",
+            "remarks",
+            "normal",
+            "high",
+            "low",
+            "neutrophil",
+            "lymphocyte",
+            "monocyte",
+            "eosinophil",
+            "mcv",
+            "mch",
+            "mchc",
+            "g/dl",
+            "mg/dl",
+            "mmol/l",
+            "cells/ul",
+        ]
+
+        has_medical_keyword = any(keyword in lower for keyword in medical_keywords)
+        has_numbers = any(char.isdigit() for char in stripped)
+
+        # Keep line if it has medical keywords, numbers, or is substantial
+        if has_medical_keyword or has_numbers or len(stripped) >= 4:
+            cleaned_lines.append(stripped)
 
     cleaned_text = "\n".join(cleaned_lines)
 
     logger.info(
         "OCR cleaning completed",
-        extra={"cleaned_length": len(cleaned_text)},
+        extra={
+            "original_lines": len(text.splitlines()),
+            "cleaned_lines": len(cleaned_lines),
+            "cleaned_length": len(cleaned_text),
+        },
     )
 
     return cleaned_text

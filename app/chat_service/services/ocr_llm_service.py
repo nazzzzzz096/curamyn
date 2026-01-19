@@ -56,10 +56,19 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         extra={"text_length": len(text) if text else 0},
     )
 
-    if not text or len(text) < 80:
+    # Log preview of extracted text for debugging
+    if text:
+        logger.info(f"OCR text preview (first 200 chars): {text[:200]}")
+
+    # Reduced minimum length threshold
+    if not text or len(text) < 30:
+        logger.warning("OCR text too short")
         return _fallback("The uploaded image could not be read clearly.")
 
+    # More lenient medical document detection
     if not _is_medical_document(text):
+        logger.warning("Text doesn't appear to be medical document")
+        logger.debug(f"Full text: {text}")
         return _fallback(
             "This document does not appear to be a medical laboratory report."
         )
@@ -67,9 +76,6 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     active_client, GenerationConfig = (
         (client, None) if client is not None else _load_gemini()
     )
-
-    if active_client is None:
-        return _fallback_text_response()
 
     if active_client is None:
         return _fallback_text_response()
@@ -90,21 +96,26 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
                 generation_config=(
                     GenerationConfig(
                         temperature=0.2,
-                        max_output_tokens=400,
+                        max_output_tokens=800,  # Increased for longer reports
                     )
                     if GenerationConfig
                     else None
                 ),
             )
             output = _extract_llm_text(response)
+            logger.info(f"LLM response length: {len(output)}")
+            logger.debug(f"LLM response preview: {output[:200]}")
 
         except Exception:
             logger.exception("OCR LLM call failed")
             output = ""
 
-        if not output or not _is_useful_summary(output):
-            logger.warning("OCR summary insufficient — fallback applied")
+        if not output:
+            logger.warning("OCR LLM returned empty output — using fallback")
             output = _fallback_text()
+        elif not _is_useful_summary(output):
+            logger.warning("OCR summary insufficient but not empty — keeping it anyway")
+            # Don't replace with fallback if we have some output
 
         latency = time.time() - start
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
@@ -141,7 +152,9 @@ def _fallback_text() -> str:
 
 
 def _is_medical_document(text: str) -> bool:
+    """Check if text appears to be from a medical document."""
     keywords = [
+        # Blood tests
         "blood",
         "cbc",
         "hemoglobin",
@@ -149,46 +162,79 @@ def _is_medical_document(text: str) -> bool:
         "wbc",
         "rbc",
         "esr",
+        "hematology",
+        # Document structure
         "lab report",
+        "laboratory",
         "test result",
+        "clinical",
+        "pathology",
+        "diagnostic",
+        # Common medical terms
+        "patient",
+        "sample",
+        "specimen",
+        "reference range",
+        "normal range",
+        # Medical measurements
+        "g/dl",
+        "mg/dl",
+        "cells/ul",
+        "count",
+        "differential",
+        # Other tests
+        "glucose",
+        "creatinine",
+        "cholesterol",
+        "liver",
+        "kidney",
+        "thyroid",
     ]
     text_lower = text.lower()
-    return any(k in text_lower for k in keywords)
+
+    # Require at least 2 medical keywords for confidence
+    matches = sum(1 for k in keywords if k in text_lower)
+    logger.info(f"Medical keyword matches: {matches}")
+
+    return matches >= 2
 
 
 def _build_prompt(text: str) -> str:
-    """it decides how my ocr models interprets result"""
+    """Build prompt for LLM to summarize medical document."""
     return f"""
 You are a medical document summarization assistant.
 
 TASK:
 - Extract and summarize sections EXACTLY as written
+- Preserve all test names, values, units, and ranges
 - Preserve remarks, comments, and notes
-- DO NOT interpret values
+- DO NOT interpret values or give medical advice
 - DO NOT diagnose
-- DO NOT say normal/abnormal unless written
+- DO NOT say normal/abnormal unless explicitly written in the document
 
 ALLOWED:
-- Reformat into sections
-- Bullet points
-- Clear language
+- Reformat into clear sections
+- Use bullet points for clarity
+- Organize information logically
 
-REQUIRED SECTIONS (if present):
-- Test name
-- Values
-- Units
+REQUIRED SECTIONS (if present in document):
+- Document type (e.g., "Haematology Report", "Complete Blood Count")
+- Test name and parameters
+- Values with units
 - Reference ranges
-- Remarks / Comments
+- Remarks or comments
+- Any clinical correlations mentioned
 
 Document Text:
 {text}
 
-Return a structured summary.
+Return a well-structured summary that preserves all important medical information.
 """
 
 
 def _is_useful_summary(text: str) -> bool:
-
+    """Check if summary contains useful medical information."""
+    # More lenient check - just verify it has some medical content
     return any(
         k in text.lower()
         for k in [
@@ -200,11 +246,16 @@ def _is_useful_summary(text: str) -> bool:
             "cbc",
             "clinical",
             "notes",
+            "report",
+            "count",
+            "blood",
+            "result",
         ]
     )
 
 
 def _extract_llm_text(response) -> str:
+    """Extract text from Gemini response."""
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         return text.strip()
