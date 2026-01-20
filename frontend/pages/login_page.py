@@ -5,11 +5,11 @@ Provides centered login form with dark theme styling.
 """
 
 from nicegui import ui
-
+from frontend.api.consent_client import get_consent
 from frontend.api.auth_client import login_user
 from frontend.state.app_state import state
 from frontend.utils.logger import get_logger
-
+import json
 logger = get_logger(__name__)
 
 
@@ -84,12 +84,7 @@ def _handle_login(
     button,
 ) -> None:
     """
-    Authenticate the user and navigate to onboarding.
-
-    Args:
-        email: User email.
-        password: User password.
-        button: Login button (used to disable during request).
+    Authenticate the user and navigate to onboarding or chat.
     """
     if not email or not password:
         ui.notify(
@@ -111,25 +106,61 @@ def _handle_login(
             password=password,
         )
 
+        # =====================
+        # Store auth state
+        # =====================
         state.token = token_data["access_token"]
         state.user_id = token_data.get("user_id")
         state.session_id = token_data.get("session_id")
 
         ui.run_javascript(
             f"""
-    localStorage.setItem('access_token', '{token_data["access_token"]}');
-    """
+            localStorage.setItem('access_token', '{state.token}');
+            """
         )
-        logger.info("Login successful")
+
+        # =====================
+        # 🔥 LOAD CONSENT FROM BACKEND
+        # =====================
+        try:
+            consent = get_consent(token=state.token)
+            state.consent = consent
+            logger.info("Consent loaded", extra={"consent": consent})
+
+            # Optional: persist in browser
+            ui.run_javascript(
+                f"""
+                localStorage.setItem('consent', '{json.dumps(consent)}');
+                """
+            )
+
+        except Exception:
+            # If no consent exists yet
+            state.consent = {
+                "memory": False,
+                "voice": False,
+                "document": False,
+                "image": False,
+            }
+            logger.info("No existing consent found")
+
         ui.notify(
             "Login successful",
             type="positive",
         )
-        ui.navigate.to("/onboarding")
+
+        # =====================
+        # 🔥 NAVIGATION LOGIC
+        # =====================
+        if any(state.consent.values()):
+            # Consent already given → skip onboarding
+            ui.navigate.to("/chat")
+        else:
+            # First-time user → onboarding
+            ui.navigate.to("/onboarding")
 
     except Exception:
         logger.exception("Login failed")
-
         ui.notify(
             "Invalid email or password",
             type="negative",

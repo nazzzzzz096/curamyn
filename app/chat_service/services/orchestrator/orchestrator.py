@@ -19,6 +19,7 @@ from app.chat_service.services.voice_pipeline_service import voice_chat_pipeline
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.health_advisor_service import analyze_health_text
 from app.chat_service.services.ocr_llm_service import analyze_ocr_text
+from app.chat_service.services.educational_llm_service import explain_medical_terms
 from app.chat_service.services.context_agent.context_agent import ContextAgent
 from app.chat_service.services.safety_guard import (
     check_input_safety,
@@ -85,6 +86,11 @@ async def run_interaction(
             image=image,
             image_type=image_type,
         )
+
+        # Store document text if this is a document upload
+        if input_type == "image" and image_type == "document" and normalized_text:
+            state.last_document_text = normalized_text
+            logger.info("Stored document text for future educational queries")
 
         # adding agents CONTEXT AGENT (conversation continuity)
         # Inject summary + session memory ONCE here
@@ -188,6 +194,45 @@ def _emergency_response() -> Dict[str, str]:
     }
 
 
+def _is_asking_about_medical_terms(text: str) -> bool:
+    """
+    Detect if user is asking about medical terminology.
+    
+    Keywords that indicate educational questions:
+    - what is, what does, what are
+    - explain, define, meaning
+    - rbc, wbc, hemoglobin, mcv, mch, etc.
+    """
+    text_lower = text.lower()
+    
+    # Question patterns
+    question_patterns = [
+        "what is",
+        "what does",
+        "what are",
+        "what's",
+        "explain",
+        "define",
+        "meaning of",
+        "means",
+        "stand for",
+        "tell me about",
+    ]
+    
+    # Medical term indicators
+    medical_terms = [
+        "rbc", "wbc", "hemoglobin", "platelet", "mcv", "mch", "mchc",
+        "neutrophil", "lymphocyte", "monocyte", "eosinophil", "basophil",
+        "hematocrit", "differential", "count", "cells", "range",
+        "reference", "normal", "test", "result", "value",
+    ]
+    
+    has_question = any(pattern in text_lower for pattern in question_patterns)
+    has_medical_term = any(term in text_lower for term in medical_terms)
+    
+    return has_question and has_medical_term
+
+
 def _route_llm(
     *,
     input_type: str,
@@ -220,7 +265,19 @@ def _route_llm(
         }
 
     # ==========================================================
-    # HEALTH TEXT (SINGLE PROMPT — ALWAYS)
+    # EDUCATIONAL MODE (Follow-up questions about document)
+    # ==========================================================
+    if input_type == "text" and state.last_document_text:
+        if _is_asking_about_medical_terms(normalized_text):
+            logger.info("Routing to educational LLM (term explanation)")
+            return explain_medical_terms(
+                question=normalized_text,
+                document_text=state.last_document_text,
+                user_id=user_id,
+            )
+
+    # ==========================================================
+    # HEALTH TEXT (Default - Self-care mode)
     # ==========================================================
     return analyze_health_text(
         text=normalized_text,

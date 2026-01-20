@@ -1012,7 +1012,7 @@ async def _send_file() -> None:
         ui.notify("You are not authenticated", type="negative")
         return
 
-    # ✅ CHECK CONSENT BEFORE SENDING
+    # CHECK CONSENT BEFORE SENDING
     if CURRENT_IMAGE_TYPE == "document":
         if not state.consent.get("document", False):
             ui.notify(

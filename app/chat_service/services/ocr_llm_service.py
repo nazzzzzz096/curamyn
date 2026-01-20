@@ -5,6 +5,7 @@ Safe for CI and tests.
 
 import os
 import time
+import re
 from types import SimpleNamespace
 
 import mlflow
@@ -17,10 +18,44 @@ logger = get_logger(__name__)
 load_dotenv()
 client = None
 MODEL_NAME = "models/gemini-flash-latest"
-try:
-    from google.genai.types import GenerateContentConfig
-except Exception:
-    GenerateContentConfig = None
+
+
+# ==================================================
+# Clean markdown formatting
+# ==================================================
+def _clean_markdown(text: str) -> str:
+    """
+    Remove markdown formatting and clean up LLM output.
+    
+    Args:
+        text: Raw LLM output with markdown formatting
+        
+    Returns:
+        Clean, readable text
+    """
+    if not text:
+        return text
+    
+    # Remove markdown headers (##, ###)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    
+    # Remove bold/italic markers (**text**, *text*)
+    text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^\*]+)\*', r'\1', text)
+    
+    # Remove table separators (|----|---|)
+    text = re.sub(r'\|[\s\-:]+\|', '', text)
+    
+    # Clean up pipe characters used in tables
+    text = re.sub(r'\s*\|\s*', ' | ', text)
+    
+    # Remove multiple consecutive blank lines
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    # Remove leading/trailing whitespace
+    text = text.strip()
+    
+    return text
 
 
 # ==================================================
@@ -35,12 +70,13 @@ def _load_gemini():
 
     try:
         from google import genai
+        from google.genai.types import GenerateContentConfig
 
         api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
         if not api_key:
             return None, None
 
-        return genai.Client(api_key=api_key)
+        return genai.Client(api_key=api_key), GenerateContentConfig
 
     except Exception as exc:
         logger.warning("Gemini OCR unavailable: %s", exc)
@@ -76,7 +112,9 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             "This document does not appear to be a medical laboratory report."
         )
 
-    active_client = _load_gemini()
+    active_client, GenerationConfig = (
+        (client, None) if client is not None else _load_gemini()
+    )
 
     if active_client is None:
         return _fallback_text_response()
@@ -93,20 +131,21 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         try:
             response = active_client.models.generate_content(
                 model=MODEL_NAME,
-                contents=[
-                    {
-                        "role": "user",
-                        "parts": [{"text": prompt}],
-                    }
-                ],
-                config=GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=800,
-                    top_p=0.9,
+                contents=prompt,
+                config=(
+                    GenerationConfig(
+                        temperature=0.2,
+                        max_output_tokens=2048,  # Increased for full reports
+                    )
+                    if GenerationConfig
+                    else None
                 ),
             )
-
             output = _extract_llm_text(response)
+            
+            # Clean markdown formatting
+            output = _clean_markdown(output)
+            
             logger.info(f"LLM response length: {len(output)}")
             logger.debug(f"LLM response preview: {output[:200]}")
 
@@ -114,12 +153,10 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             logger.exception("OCR LLM call failed")
             output = ""
 
-        if not output:
-            logger.warning("OCR LLM returned empty output — using fallback")
+        # Just return whatever LLM gives us
+        if not output or len(output) < 50:
+            logger.warning("OCR LLM returned insufficient output")
             output = _fallback_text()
-        elif not _is_useful_summary(output):
-            logger.warning("OCR summary insufficient but not empty — keeping it anyway")
-            # Don't replace with fallback if we have some output
 
         latency = time.time() - start
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
@@ -167,6 +204,8 @@ def _is_medical_document(text: str) -> bool:
         "rbc",
         "esr",
         "hematology",
+        "haematology",
+        
         # Document structure
         "lab report",
         "laboratory",
@@ -174,18 +213,21 @@ def _is_medical_document(text: str) -> bool:
         "clinical",
         "pathology",
         "diagnostic",
+        
         # Common medical terms
         "patient",
         "sample",
         "specimen",
         "reference range",
         "normal range",
+        
         # Medical measurements
         "g/dl",
         "mg/dl",
         "cells/ul",
         "count",
         "differential",
+        
         # Other tests
         "glucose",
         "creatinine",
@@ -195,67 +237,38 @@ def _is_medical_document(text: str) -> bool:
         "thyroid",
     ]
     text_lower = text.lower()
-
+    
     # Require at least 2 medical keywords for confidence
     matches = sum(1 for k in keywords if k in text_lower)
     logger.info(f"Medical keyword matches: {matches}")
-
+    
     return matches >= 2
 
 
 def _build_prompt(text: str) -> str:
     """Build prompt for LLM to summarize medical document."""
     return f"""
-You are a medical document summarization assistant.
+You are a medical document extraction assistant.
 
-TASK:
-- Extract and summarize sections EXACTLY as written
-- Preserve all test names, values, units, and ranges
-- Preserve remarks, comments, and notes
-- DO NOT interpret values or give medical advice
-- DO NOT diagnose
-- DO NOT say normal/abnormal unless explicitly written in the document
+Extract and organize the key information from this medical lab report.
 
-ALLOWED:
-- Reformat into clear sections
-- Use bullet points for clarity
-- Organize information logically
-
-REQUIRED SECTIONS (if present in document):
-- Document type (e.g., "Haematology Report", "Complete Blood Count")
-- Test name and parameters
-- Values with units
-- Reference ranges
-- Remarks or comments
-- Any clinical correlations mentioned
-
-Document Text:
+DOCUMENT TEXT:
 {text}
 
-Return a well-structured summary that preserves all important medical information.
+IMPORTANT FORMATTING RULES:
+- DO NOT use markdown formatting (no **, ##, ***, etc.)
+- DO NOT use tables with pipes and dashes
+- Use simple, plain text formatting
+- Use line breaks and indentation for structure
+- Use simple dashes (-) for bullet points if needed
+
+Provide a clear, structured summary with:
+1. Report type (e.g., Haematology Report, CBC)
+2. All test parameters with values and reference ranges
+3. Any remarks or clinical notes
+
+Format it clearly and simply. DO NOT interpret or diagnose - just present the data.
 """
-
-
-def _is_useful_summary(text: str) -> bool:
-    """Check if summary contains useful medical information."""
-    # More lenient check - just verify it has some medical content
-    return any(
-        k in text.lower()
-        for k in [
-            "test",
-            "value",
-            "range",
-            "remarks",
-            "hemoglobin",
-            "cbc",
-            "clinical",
-            "notes",
-            "report",
-            "count",
-            "blood",
-            "result",
-        ]
-    )
 
 
 def _extract_llm_text(response) -> str:
