@@ -26,6 +26,7 @@ _voice: Optional[PiperVoice] = None
 # INTERNAL HELPERS
 # ======================================================
 
+
 def _load_voice() -> PiperVoice:
     """
     Lazily load and cache the Piper voice model.
@@ -95,6 +96,7 @@ def pcm_to_wav_bytes(
 # ======================================================
 # PUBLIC API
 # ======================================================
+
 
 def synthesize_tts(text: str) -> bytes:
     """

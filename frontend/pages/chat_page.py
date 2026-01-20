@@ -554,7 +554,7 @@ def _render_input_bar() -> None:
                 "🛑 Stop",
                 on_click=_stop_recording,
             )
-            
+
 
 def _start_recording() -> None:
     """
@@ -699,18 +699,18 @@ async def send_voice(audio_array: list[int]) -> dict:
 
                 if result.get("audio_base64"):
                     audio_msg = {
-                   "author": "Curamyn",
-                   "sent": False,
-                   "type": "audio",
-                   "audio_data": result["audio_base64"],
-                   "mime_type": "audio/wav",
-                }
-                    _render_message(audio_msg, CHAT_CONTAINER)  
+                        "author": "Curamyn",
+                        "sent": False,
+                        "type": "audio",
+                        "audio_data": result["audio_base64"],
+                        "mime_type": "audio/wav",
+                    }
+                    _render_message(audio_msg, CHAT_CONTAINER)
                     _scroll_to_bottom()
 
-                #  AUTO-PLAY THE LAST CHAT AUDIO
+                    #  AUTO-PLAY THE LAST CHAT AUDIO
                     ui.run_javascript(
-                    """
+                        """
                     setTimeout(() => {
                         const audios = document.querySelectorAll('audio');
                         if (!audios.length) return;
@@ -720,7 +720,7 @@ async def send_voice(audio_array: list[int]) -> dict:
                         last.play().catch(() => {});
                     }, 300);
                     """
-                )
+                    )
 
         return result
 
@@ -1152,11 +1152,13 @@ def _render_message(message: dict, container) -> None:
                     """,
                     sanitize=False,
                 )
-                ui.run_javascript("""
+                ui.run_javascript(
+                    """
                   setTimeout(() => {
                   document.querySelectorAll('audio').forEach(a => a.load());
                    }, 50);
-                 """)
+                 """
+                )
 
             return
 
