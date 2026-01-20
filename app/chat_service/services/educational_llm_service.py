@@ -48,41 +48,41 @@ def explain_medical_terms(
 ) -> dict:
     """
     Explain medical terms from the user's uploaded document.
-    
+
     STRICT RULES:
     - Only explain terms that appear in the document
     - Do NOT diagnose
     - Do NOT say if results are normal/abnormal
     - Educational purpose only
-    
+
     Args:
         question: User's question about terms
         document_text: The extracted document text
         user_id: Optional user identifier
-        
+
     Returns:
         dict with intent, severity, and response_text
     """
     logger.info("Educational mode activated")
-    
+
     client, GenerateContentConfig = _load_gemini()
-    
+
     if client is None:
         return {
             "intent": "educational",
             "severity": "informational",
             "response_text": "I can help explain medical terms, but the system is currently unavailable.",
         }
-    
+
     start_time = time.time()
-    
+
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "educational_llm")
         mlflow_safe(mlflow.set_tag, "mode", "term_explanation")
-        
+
         if user_id:
             mlflow_safe(mlflow.set_tag, "user_id", user_id)
-        
+
         prompt = f"""You are a medical terminology educator.
 
 USER'S DOCUMENT (for reference only):
@@ -119,20 +119,21 @@ Provide a clear, simple explanation in 2-3 sentences."""
                     else None
                 ),
             )
-            
+
             output = _extract_text(response)
-            
+
         except Exception:
             logger.exception("Educational LLM call failed")
             output = "I'm having trouble explaining that right now. Please try again."
-        
+
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
-        
+
         return {
             "intent": "educational",
             "severity": "informational",
-            "response_text": output or "I can help explain medical terms from your document. What would you like to know?",
+            "response_text": output
+            or "I can help explain medical terms from your document. What would you like to know?",
         }
 
 

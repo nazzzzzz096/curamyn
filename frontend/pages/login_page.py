@@ -10,6 +10,7 @@ from frontend.api.auth_client import login_user
 from frontend.state.app_state import state
 from frontend.utils.logger import get_logger
 import json
+
 logger = get_logger(__name__)
 
 

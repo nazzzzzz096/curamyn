@@ -26,35 +26,35 @@ MODEL_NAME = "models/gemini-flash-latest"
 def _clean_markdown(text: str) -> str:
     """
     Remove markdown formatting and clean up LLM output.
-    
+
     Args:
         text: Raw LLM output with markdown formatting
-        
+
     Returns:
         Clean, readable text
     """
     if not text:
         return text
-    
+
     # Remove markdown headers (##, ###)
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-    
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
     # Remove bold/italic markers (**text**, *text*)
-    text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
-    text = re.sub(r'\*([^\*]+)\*', r'\1', text)
-    
+    text = re.sub(r"\*\*([^\*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^\*]+)\*", r"\1", text)
+
     # Remove table separators (|----|---|)
-    text = re.sub(r'\|[\s\-:]+\|', '', text)
-    
+    text = re.sub(r"\|[\s\-:]+\|", "", text)
+
     # Clean up pipe characters used in tables
-    text = re.sub(r'\s*\|\s*', ' | ', text)
-    
+    text = re.sub(r"\s*\|\s*", " | ", text)
+
     # Remove multiple consecutive blank lines
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-    
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+
     # Remove leading/trailing whitespace
     text = text.strip()
-    
+
     return text
 
 
@@ -142,10 +142,10 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
                 ),
             )
             output = _extract_llm_text(response)
-            
+
             # Clean markdown formatting
             output = _clean_markdown(output)
-            
+
             logger.info(f"LLM response length: {len(output)}")
             logger.debug(f"LLM response preview: {output[:200]}")
 
@@ -205,7 +205,6 @@ def _is_medical_document(text: str) -> bool:
         "esr",
         "hematology",
         "haematology",
-        
         # Document structure
         "lab report",
         "laboratory",
@@ -213,21 +212,18 @@ def _is_medical_document(text: str) -> bool:
         "clinical",
         "pathology",
         "diagnostic",
-        
         # Common medical terms
         "patient",
         "sample",
         "specimen",
         "reference range",
         "normal range",
-        
         # Medical measurements
         "g/dl",
         "mg/dl",
         "cells/ul",
         "count",
         "differential",
-        
         # Other tests
         "glucose",
         "creatinine",
@@ -237,11 +233,11 @@ def _is_medical_document(text: str) -> bool:
         "thyroid",
     ]
     text_lower = text.lower()
-    
+
     # Require at least 2 medical keywords for confidence
     matches = sum(1 for k in keywords if k in text_lower)
     logger.info(f"Medical keyword matches: {matches}")
-    
+
     return matches >= 2
 
 

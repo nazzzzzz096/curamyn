@@ -60,7 +60,7 @@ def extract_text(image_bytes: bytes) -> str:
     # Try multiple PSM modes for better accuracy
     configs = [
         "--oem 3 --psm 3",  # Fully automatic page segmentation (default)
-        "--oem 3 --psm 6 -c preserve_interword_spaces=1", 
+        "--oem 3 --psm 6 -c preserve_interword_spaces=1",
         "--oem 3 --psm 4",  # Assume single column of text
     ]
 

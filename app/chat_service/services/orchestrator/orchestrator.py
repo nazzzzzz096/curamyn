@@ -197,14 +197,14 @@ def _emergency_response() -> Dict[str, str]:
 def _is_asking_about_medical_terms(text: str) -> bool:
     """
     Detect if user is asking about medical terminology.
-    
+
     Keywords that indicate educational questions:
     - what is, what does, what are
     - explain, define, meaning
     - rbc, wbc, hemoglobin, mcv, mch, etc.
     """
     text_lower = text.lower()
-    
+
     # Question patterns
     question_patterns = [
         "what is",
@@ -218,18 +218,36 @@ def _is_asking_about_medical_terms(text: str) -> bool:
         "stand for",
         "tell me about",
     ]
-    
+
     # Medical term indicators
     medical_terms = [
-        "rbc", "wbc", "hemoglobin", "platelet", "mcv", "mch", "mchc",
-        "neutrophil", "lymphocyte", "monocyte", "eosinophil", "basophil",
-        "hematocrit", "differential", "count", "cells", "range",
-        "reference", "normal", "test", "result", "value",
+        "rbc",
+        "wbc",
+        "hemoglobin",
+        "platelet",
+        "mcv",
+        "mch",
+        "mchc",
+        "neutrophil",
+        "lymphocyte",
+        "monocyte",
+        "eosinophil",
+        "basophil",
+        "hematocrit",
+        "differential",
+        "count",
+        "cells",
+        "range",
+        "reference",
+        "normal",
+        "test",
+        "result",
+        "value",
     ]
-    
+
     has_question = any(pattern in text_lower for pattern in question_patterns)
     has_medical_term = any(term in text_lower for term in medical_terms)
-    
+
     return has_question and has_medical_term
 
 
