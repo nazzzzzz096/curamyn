@@ -26,7 +26,7 @@ pydantic-settings==2.2.1
 # =========================
 # AI / LLM
 # =========================
-google-generativeai==0.3.2
+google-genai>=0.3.0
 
 # =========================
 # Experiment Tracking
@@ -38,7 +38,7 @@ rich==13.7.0
 # Voice Processing
 # =========================
 openai-whisper==20231117
-edge-tts==6.1.10
+piper-tts   
 
 # =========================
 # Vision / CNN
@@ -64,10 +64,12 @@ pytest-mock==3.12.0
 # =========================
 requests==2.31.0
 python-multipart==0.0.9
+
 # =========================
 # Validation
 # =========================
 email-validator==2.1.1
+
 # =========================
 # Async Testing
 # =========================

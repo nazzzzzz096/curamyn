@@ -21,15 +21,11 @@ class Settings(BaseSettings):
     """
 
     API_BASE_URL: str = Field(
-        default="http://localhost:8000",
+        default="http://backend:8000",
         description="Base URL for backend API",
         min_length=1,
     )
 
-    # IMPORTANT:
-    # - env_file allows local development
-    # - env_prefix prevents backend/frontend collisions
-    # - extra='ignore' safely ignores backend env variables
     model_config = ConfigDict(
         env_file=".env",
         env_prefix="CURAMYN_",

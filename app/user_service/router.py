@@ -115,7 +115,14 @@ def login(payload: UserLogin) -> TokenResponse:
         }
 
     except ValueError:
-        ...
+        logger.warning(
+            "Login failed: invalid credentials",
+            extra={"email": payload.email},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
 
 
 @router.post(

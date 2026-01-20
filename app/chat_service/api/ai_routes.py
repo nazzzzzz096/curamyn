@@ -186,7 +186,7 @@ async def ai_interact(
                     "author": "Curamyn",
                     "type": "audio",
                     "audio_data": result["audio_base64"],
-                    "mime_type": "audio/mpeg",
+                    "mime_type": "audio/wav",
                     "sent": False,
                     "timestamp": timestamp,
                 },

@@ -4,6 +4,7 @@ Application entry point for Curamyn backend.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 from app.chat_service.api.ai_routes import router as ai_router
 from app.chat_service.api.chat_history_router import (
@@ -18,6 +19,7 @@ from app.chat_service.api.voice_stream_routes import (
 from app.consent_service.router import router as consent_router
 from app.question_service.router import router as question_router
 from app.user_service.router import router as user_router
+from app.chat_service.services.piper_model_loader import load_piper_models_from_s3
 from app.chat_service.config import settings
 from app.chat_service.utils.logger import get_logger
 import mlflow
@@ -40,7 +42,15 @@ logger.info(
     os.environ.get("MLFLOW_TRACKING_USERNAME"),
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_piper_models_from_s3()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Curamyn",
     version="1.1.0",
 )

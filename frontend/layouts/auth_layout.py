@@ -9,7 +9,8 @@ from typing import Callable
 
 from nicegui import ui
 
-from app.chat_service.utils.logger import get_logger
+from frontend.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 

@@ -7,9 +7,8 @@ Provides centered login form with dark theme styling.
 from nicegui import ui
 
 from frontend.api.auth_client import login_user
-from frontend.api.consent_client import get_consent
 from frontend.state.app_state import state
-from app.chat_service.utils.logger import get_logger
+from frontend.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -115,20 +114,6 @@ def _handle_login(
         state.token = token_data["access_token"]
         state.user_id = token_data.get("user_id")
         state.session_id = token_data.get("session_id")
-
-        # ✅ FETCH USER'S CONSENT PREFERENCES
-        try:
-            consent_data = get_consent(token=state.token)
-            state.consent = {
-                "memory": consent_data.get("memory", False),
-                "voice": consent_data.get("voice", False),
-                "document": consent_data.get("document", False),
-                "image": consent_data.get("image", False),
-            }
-            logger.info("User consent loaded", extra={"consent": state.consent})
-        except Exception:
-            logger.exception("Failed to load user consent")
-            # Keep default (all False) on failure
 
         ui.run_javascript(
             f"""

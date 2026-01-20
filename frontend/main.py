@@ -13,7 +13,8 @@ from frontend.pages.signup_page import show_signup_page
 from frontend.pages.onboarding_page import show_onboarding_page
 from frontend.pages.chat_page import show_chat_page
 from frontend.state.app_state import state
-from app.chat_service.utils.logger import get_logger
+from frontend.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 

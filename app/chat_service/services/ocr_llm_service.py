@@ -17,6 +17,10 @@ logger = get_logger(__name__)
 load_dotenv()
 client = None
 MODEL_NAME = "models/gemini-flash-latest"
+try:
+    from google.genai.types import GenerateContentConfig
+except Exception:
+    GenerateContentConfig = None
 
 
 # ==================================================
@@ -31,13 +35,12 @@ def _load_gemini():
 
     try:
         from google import genai
-        from google.genai.types import GenerateContentConfig
 
         api_key = os.getenv("CURAMYN_GEMINI_API_KEY")
         if not api_key:
             return None, None
 
-        return genai.Client(api_key=api_key), GenerateContentConfig
+        return genai.Client(api_key=api_key)
 
     except Exception as exc:
         logger.warning("Gemini OCR unavailable: %s", exc)
@@ -73,9 +76,7 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             "This document does not appear to be a medical laboratory report."
         )
 
-    active_client, GenerationConfig = (
-        (client, None) if client is not None else _load_gemini()
-    )
+    active_client = _load_gemini()
 
     if active_client is None:
         return _fallback_text_response()
@@ -92,16 +93,19 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         try:
             response = active_client.models.generate_content(
                 model=MODEL_NAME,
-                contents=prompt,
-                generation_config=(
-                    GenerationConfig(
-                        temperature=0.2,
-                        max_output_tokens=800,  # Increased for longer reports
-                    )
-                    if GenerationConfig
-                    else None
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+                config=GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=800,
+                    top_p=0.9,
                 ),
             )
+
             output = _extract_llm_text(response)
             logger.info(f"LLM response length: {len(output)}")
             logger.debug(f"LLM response preview: {output[:200]}")

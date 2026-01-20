@@ -5,7 +5,8 @@ from frontend.api.onboarding_client import (
     submit_answer,
 )
 from frontend.state.app_state import state
-from app.chat_service.utils.logger import get_logger
+from frontend.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 

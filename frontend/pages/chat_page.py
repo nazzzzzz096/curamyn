@@ -18,9 +18,8 @@ from frontend.api.consent_client import update_consent
 from frontend.api.memory_client import delete_memory
 from frontend.api.auth_client import logout_user
 from frontend.api.chat_history_client import fetch_chat_history
-from app.chat_service.utils.logger import get_logger
-from frontend.api.chat_summary_client import save_chat_summary
-from frontend.api.chat_history_client import end_chat_session
+from frontend.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -189,6 +188,7 @@ def show_chat_page() -> None:
 def load_history_ui() -> dict:
     """
     Load chat history and render it safely inside the UI slot.
+    ALWAYS shows welcome message at start of session, followed by history.
     """
     global CHAT_CONTAINER
 
@@ -199,32 +199,35 @@ def load_history_ui() -> dict:
     try:
         CHAT_CONTAINER.clear()
 
-        if not state.token or not state.session_id:
-            logger.info("No session found, showing welcome message")
-            with CHAT_CONTAINER:
-                _add_ai("Hi 👋 How can I help you today?")
-            return {"ok": True}
-
-        messages = fetch_chat_history(
-            token=state.token,
-            session_id=state.session_id,
-        )
-
-        logger.info(
-            "Rendering chat history in UI",
-            extra={"count": len(messages)},
-        )
-
+        # ✅ ALWAYS show welcome message at session start
         with CHAT_CONTAINER:
-            for message in messages:
-                _render_message(message, CHAT_CONTAINER)
+            _add_ai("Hi 👋 How can I help you today?")
+
+        # Then load and show any existing chat history
+        if state.token and state.session_id:
+            try:
+                messages = fetch_chat_history(
+                    token=state.token,
+                    session_id=state.session_id,
+                )
+
+                logger.info(
+                    "Rendering chat history in UI",
+                    extra={"count": len(messages)},
+                )
+
+                with CHAT_CONTAINER:
+                    for message in messages:
+                        _render_message(message, CHAT_CONTAINER)
+
+            except Exception:
+                logger.exception("Failed to load chat history")
+                # Welcome message already shown, just log the error
 
         return {"ok": True}
 
     except Exception:
-        logger.exception("Failed to load chat history")
-        with CHAT_CONTAINER:
-            _add_ai("Hi 👋 How can I help you today?")
+        logger.exception("Failed to initialize chat UI")
         return {"ok": False}
 
 
@@ -315,11 +318,10 @@ async def add_user_audio(payload: dict) -> dict:
 
         state.messages.append(msg)
 
-        with CHAT_CONTAINER:
+        with CHAT_CONTAINER:  #  Enter context ONCE
             _render_message(msg, CHAT_CONTAINER)
-
-        _store_message_js(msg)
-        _scroll_to_bottom()
+            _store_message_js(msg)  # Now safe - inside context
+            _scroll_to_bottom()  # Now safe - inside context
 
     return {"ok": True}
 
@@ -552,20 +554,7 @@ def _render_input_bar() -> None:
                 "🛑 Stop",
                 on_click=_stop_recording,
             )
-            ui.html(
-                """
-<audio id="ai-audio-player" controls
-       style="
-           height:28px;
-           width:120px;
-           margin-left:8px;
-           flex:0 0 auto;
-       ">
-</audio>
-""",
-                sanitize=False,
-            )
-
+            
 
 def _start_recording() -> None:
     """
@@ -658,28 +647,11 @@ async def _stop_recording() -> None:
             });
 
             const data = await res.json();
-            // 🔐 Persist session_id in browser
+            //  Persist session_id in browser
             if (data.session_id) {
                 sessionStorage.setItem('session_id', data.session_id);
             }
-
-            //  PLAY AUDIO USING HTML <audio> ELEMENT
-            if (data.audio_base64) {
-                const audioEl = document.getElementById('ai-audio-player');
-
-                const binary = atob(data.audio_base64);
-                const bytes = new Uint8Array(binary.length);
-
-                for (let i = 0; i < binary.length; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                }
-
-                const blob = new Blob([bytes], { type: 'audio/mpeg' });
-                const url = URL.createObjectURL(blob);
-
-                audioEl.src = url;
-                audioEl.play();
-            }
+                
         };
         """
     )
@@ -699,12 +671,10 @@ async def send_voice(audio_array: list[int]) -> dict:
     logger.info("Received voice input from browser")
 
     if not state.token:
-        logger.warning("Voice input received without authentication")
         return {"error": "Not authenticated"}
 
     audio_bytes = bytes(audio_array)
 
-    #  Show typing indicator INSIDE the UI slot context
     if CHAT_CONTAINER:
         with CHAT_CONTAINER:
             _show_typing_indicator()
@@ -719,70 +689,50 @@ async def send_voice(audio_array: list[int]) -> dict:
             audio_bytes=audio_bytes,
         )
 
-        #  Hide typing indicator INSIDE the UI slot context
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
-        # Check if backend returned consent error
-        if result.get("error") and "consent" in result.get("error", "").lower():
-            ui.notify(
-                "Voice processing is disabled. Enable it in consent settings.",
-                type="warning",
-            )
-            return result
+                #  Always show AI text
+                if result.get("message"):
+                    _add_ai(result["message"])
 
-        #  Handle AI response INSIDE the UI slot context
-        if CHAT_CONTAINER:
-            with CHAT_CONTAINER:
-                _handle_ai_response(result)
+                if result.get("audio_base64"):
+                    audio_msg = {
+                   "author": "Curamyn",
+                   "sent": False,
+                   "type": "audio",
+                   "audio_data": result["audio_base64"],
+                   "mime_type": "audio/wav",
+                }
+                    _render_message(audio_msg, CHAT_CONTAINER)  
+                    _scroll_to_bottom()
 
-        state.session_id = result.get(
-            "session_id",
-            state.session_id,
-        )
+                #  AUTO-PLAY THE LAST CHAT AUDIO
+                    ui.run_javascript(
+                    """
+                    setTimeout(() => {
+                        const audios = document.querySelectorAll('audio');
+                        if (!audios.length) return;
 
-        logger.info("Voice interaction processed successfully")
+                        const last = audios[audios.length - 1];
+                        last.load();
+                        last.play().catch(() => {});
+                    }, 300);
+                    """
+                )
+
         return result
 
-    except Exception as e:
-        #  Hide typing indicator on error INSIDE the UI slot context
+    except Exception:
+        logger.exception("Voice interaction failed")
+
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
+                ui.notify("Voice playback failed", type="negative")
 
-        logger.exception("Voice interaction failed")
-
-        # Check if it's a consent-related error
-        error_msg = str(e)
-        if "consent" in error_msg.lower() or "disabled" in error_msg.lower():
-            ui.notify(
-                "Voice processing is disabled. Enable it in consent settings.",
-                type="warning",
-            )
-
-        return {
-            "error": "Failed to process voice input",
-        }
-
-
-def _sync_session_id_to_browser() -> None:
-    """
-    Sync session_id from Python state to browser sessionStorage.
-
-    Must be called ONLY from UI context.
-    """
-    if not state.session_id:
-        return
-
-    ui.run_javascript(
-        f"""
-        sessionStorage.setItem(
-            'session_id',
-            '{state.session_id}'
-        );
-        """
-    )
+        return {"error": "Voice playback failed"}
 
 
 # =================================================
@@ -1189,18 +1139,25 @@ def _render_message(message: dict, container) -> None:
                 f"data:{message.get('mime_type')};base64,"
                 f"{message.get('audio_data')}"
             )
-
+            audio_id = f"audio-{message.get('timestamp', '')}"
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
                 ui.html(
                     f"""
-                    <audio controls style="max-width:260px">
-                        <source src="{data_url}">
+                    <audio id="{audio_id}" controls preload="auto">
+                    <source src="{data_url}" type="{message.get('mime_type')}">
                     </audio>
+
                     """,
                     sanitize=False,
                 )
+                ui.run_javascript("""
+                  setTimeout(() => {
+                  document.querySelectorAll('audio').forEach(a => a.load());
+                   }, 50);
+                 """)
+
             return
 
         # ================= IMAGE =================
@@ -1232,39 +1189,32 @@ def _render_message(message: dict, container) -> None:
 def _store_message_js(msg: dict) -> None:
     """
     Persist a chat message in browser sessionStorage.
-
-    This keeps chat history available across page refreshes
-    during the active session.
+    SAFE: silently skip if not in UI context.
     """
-    logger.debug(
-        "Storing message in browser sessionStorage",
-        extra={"author": msg.get("author")},
-    )
-
-    payload = json.dumps(msg)
-
-    ui.run_javascript(
-        f"""
-        (function() {{
-            try {{
-                const existing = JSON.parse(
-                    sessionStorage.getItem('chat_messages') || '[]'
-                );
-
-                existing.push({payload});
-
-                sessionStorage.setItem(
-                    'chat_messages',
-                    JSON.stringify(existing)
-                );
-
-                window.chatMessages = existing;
-            }} catch (err) {{
-                console.error('Failed to store chat message', err);
-            }}
-        }})();
-        """
-    )
+    try:
+        ui.run_javascript(
+            f"""
+            (function() {{
+                try {{
+                    const existing = JSON.parse(
+                        sessionStorage.getItem('chat_messages') || '[]'
+                    );
+                    existing.push({json.dumps(msg)});
+                    sessionStorage.setItem(
+                        'chat_messages',
+                        JSON.stringify(existing)
+                    );
+                    window.chatMessages = existing;
+                }} catch (err) {{
+                    console.error('Failed to store chat message', err);
+                }}
+            }})();
+            """
+        )
+    except RuntimeError:
+        #  FastAPI endpoint or background task
+        # Safe to ignore – UI thread will handle it later
+        logger.debug("Skipping ui.run_javascript (no UI context)")
 
 
 def _clear_browser_chat(container) -> None:

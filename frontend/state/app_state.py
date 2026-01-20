@@ -6,7 +6,7 @@ class AppState:
     user_id: Optional[str] = None
     session_id: Optional[str] = None
 
-    # ✅ CONSENT IS A DICT NOW
+    #  CONSENT IS A DICT NOW
     consent: Dict[str, bool] = {
         "memory": False,
         "voice": False,

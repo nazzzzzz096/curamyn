@@ -10,7 +10,8 @@ import requests
 from requests import RequestException
 
 from frontend.config import settings
-from app.chat_service.utils.logger import get_logger
+from frontend.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 
