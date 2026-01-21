@@ -1,36 +1,36 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.chat_service.services.tts_streamer import synthesize_tts
 from app.chat_service.utils.logger import get_logger
+from app.core.rate_limit import limiter
 
 router = APIRouter()
 logger = get_logger(__name__)
 
 
 @router.websocket("/ai/voice-stream")
-async def voice_stream(ws: WebSocket):
+@limiter.limit("10/minute")
+async def voice_stream(websocket: WebSocket):
     """
     WebSocket endpoint for voice synthesis.
-    Currently sends full audio (non-streamed).
     """
-    await ws.accept()
+    await websocket.accept()
     logger.info("Voice stream WebSocket accepted")
 
     try:
-        data = await ws.receive_json()
+        data = await websocket.receive_json()
         text = data.get("text", "")
 
         if not text.strip():
-            await ws.send_json({"error": "Empty text"})
+            await websocket.send_json({"error": "Empty text"})
             return
 
         audio_bytes = synthesize_tts(text)
 
         if not audio_bytes:
-            await ws.send_json({"error": "No audio generated"})
+            await websocket.send_json({"error": "No audio generated"})
             return
 
-        await ws.send_bytes(audio_bytes)
-
+        await websocket.send_bytes(audio_bytes)
         logger.info("Voice stream sent successfully")
 
     except WebSocketDisconnect:
@@ -38,7 +38,7 @@ async def voice_stream(ws: WebSocket):
 
     except Exception as exc:
         logger.exception("Voice stream error")
-        await ws.send_json({"error": str(exc)})
+        await websocket.send_json({"error": str(exc)})
 
     finally:
-        await ws.close()
+        await websocket.close()

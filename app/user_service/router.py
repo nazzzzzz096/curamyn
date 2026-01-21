@@ -5,7 +5,7 @@ Handles user signup and login workflows.
 """
 
 from app.chat_service.services.session_summary_service import generate_session_summary
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Request
 from fastapi import Depends
 from app.core.dependencies import get_current_user
 from app.chat_service.services.orchestrator.session_lifecycle import end_session
@@ -25,6 +25,7 @@ from app.chat_service.repositories.session_repositories import (
 )
 from typing import Optional
 import uuid
+from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -36,7 +37,8 @@ logger = get_logger(__name__)
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def signup(payload: UserSignup) -> UserResponse:
+@limiter.limit("2/minute")
+def signup(request: Request, payload: UserSignup) -> UserResponse:
     """
     Register a new user.
 
@@ -80,7 +82,8 @@ def signup(payload: UserSignup) -> UserResponse:
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
 )
-def login(payload: UserLogin) -> TokenResponse:
+@limiter.limit("5/minute")
+def login(request: Request, payload: UserLogin) -> TokenResponse:
     """
     Authenticate user and issue JWT token.
     Session starts here.
@@ -129,7 +132,9 @@ def login(payload: UserLogin) -> TokenResponse:
     "/logout",
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("2/minute")
 def logout(
+    request: Request,
     session_id: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):

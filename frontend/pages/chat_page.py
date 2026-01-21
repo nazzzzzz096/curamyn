@@ -36,7 +36,6 @@ PENDING_FILE_BYTES = None
 
 CONSENT_MENU = None
 DELETE_DIALOG = None
-API_BASE_URL = "http://localhost:8000"
 
 
 # =================================================

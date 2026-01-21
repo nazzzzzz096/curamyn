@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Request
 
 from app.core.dependencies import get_current_user
 from app.chat_service.repositories.session_repositories import (
@@ -6,6 +6,7 @@ from app.chat_service.repositories.session_repositories import (
     delete_chat_sessions_by_user,
 )
 from app.consent_service.service import create_or_update_consent
+from app.core.rate_limit import limiter
 
 router = APIRouter(
     prefix="/memory",
@@ -37,7 +38,9 @@ def clear_memory(
     "/clear-and-disable",
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("1/minute")
 def clear_and_disable_memory(
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
     """

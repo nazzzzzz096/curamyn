@@ -2,74 +2,127 @@
 Application entry point for Curamyn backend.
 """
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import os
+import mlflow
 from contextlib import asynccontextmanager
 
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+
 from app.chat_service.api.ai_routes import router as ai_router
-from app.chat_service.api.chat_history_router import (
-    router as chat_history_router,
-)
-from app.chat_service.api.memory_routes import (
-    router as memory_router,
-)
-from app.chat_service.api.voice_stream_routes import (
-    router as voice_stream_router,
-)
+from app.chat_service.api.chat_history_router import router as chat_history_router
+from app.chat_service.api.memory_routes import router as memory_router
+from app.chat_service.api.voice_stream_routes import router as voice_stream_router
 from app.consent_service.router import router as consent_router
 from app.question_service.router import router as question_router
 from app.user_service.router import router as user_router
+
 from app.chat_service.services.piper_model_loader import load_piper_models_from_s3
 from app.chat_service.config import settings
 from app.chat_service.utils.logger import get_logger
-import mlflow
-import os
+from app.core.rate_limit import limiter
+from app.core.security import verify_access_token
 
-# ---- Map Curamyn config → MLflow expected env vars ----
+logger = get_logger(__name__)
+
+# =========================================================
+# MLflow Setup
+# =========================================================
 os.environ["MLFLOW_TRACKING_URI"] = settings.MLFLOW_TRACKING_URI
 os.environ["MLFLOW_TRACKING_USERNAME"] = settings.DAGSHUB_USERNAME
 os.environ["MLFLOW_TRACKING_PASSWORD"] = settings.DAGSHUB_TOKEN
 
-# ---- Initialize MLflow ----
 mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
 mlflow.set_experiment("curamyn")
 
-
-logger = get_logger(__name__)
 logger.info(
-    "MLflow initialized | tracking_uri=%s | user=%s",
-    mlflow.get_tracking_uri(),
-    os.environ.get("MLFLOW_TRACKING_USERNAME"),
+    "MLflow initialized",
+    extra={
+        "tracking_uri": mlflow.get_tracking_uri(),
+        "user": os.environ.get("MLFLOW_TRACKING_USERNAME"),
+    },
 )
 
 
+# =========================================================
+# Lifespan
+# =========================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_piper_models_from_s3()
+    try:
+        load_piper_models_from_s3()
+        logger.info("Piper models loaded at startup")
+    except Exception:
+        logger.exception("Failed to preload Piper models")
     yield
 
 
+# =========================================================
+# App Init
+# =========================================================
 app = FastAPI(
     lifespan=lifespan,
     title="Curamyn",
     version="1.1.0",
 )
 
-# -------------------------------------------------
-# Middleware
-# -------------------------------------------------
+# =========================================================
+# Rate Limiting (MUST be before CORS)
+# =========================================================
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(
+    request: Request,
+    exc: RateLimitExceeded,
+):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."},
+    )
+
+
+# =========================================================
+# Attach user → request.state (for user-based limits)
+# =========================================================
+@app.middleware("http")
+async def attach_user_to_state(request: Request, call_next):
+    request.state.user = None
+
+    auth = request.headers.get("authorization")
+    if auth and auth.startswith("Bearer "):
+        try:
+            token = auth.split(" ", 1)[1]
+            request.state.user = verify_access_token(token)
+        except Exception:
+            pass
+
+    return await call_next(request)
+
+
+# =========================================================
+# CORS
+# =========================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # TODO: restrict in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# =========================================================
+# Request Logging
+# =========================================================
 @app.middleware("http")
-async def log_requests(request, call_next):
+async def log_requests(request: Request, call_next):
     logger.info(
         "Incoming request",
         extra={
@@ -80,10 +133,9 @@ async def log_requests(request, call_next):
     return await call_next(request)
 
 
-# -------------------------------------------------
+# =========================================================
 # Routers
-# -------------------------------------------------
-
+# =========================================================
 app.include_router(user_router)
 app.include_router(consent_router)
 app.include_router(question_router)
@@ -103,21 +155,14 @@ logger.info(
             "memory",
             "chat_history",
             "voice_stream",
-        ]
+        ],
     },
 )
 
-# -------------------------------------------------
+
+# =========================================================
 # Health
-# -------------------------------------------------
-
-
+# =========================================================
 @app.get("/health", tags=["health"])
 def health_check() -> dict:
-    """
-    Health check endpoint.
-
-    Returns:
-        dict: Application health status.
-    """
     return {"status": "ok"}

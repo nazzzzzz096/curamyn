@@ -4,7 +4,7 @@ Consent management API routes.
 Handles user consent preferences for data usage.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from app.chat_service.utils.logger import get_logger
 from app.consent_service.schemas import ConsentCreate, ConsentResponse
@@ -13,6 +13,7 @@ from app.consent_service.service import (
     get_user_consent,
 )
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import limiter
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,9 @@ router = APIRouter(
     "/status",
     response_model=ConsentResponse,
 )
+@limiter.limit("5/minute")
 def read_consent(
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ) -> ConsentResponse:
     """

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from typing import Dict, List, Any
 
 from app.core.dependencies import get_current_user
@@ -7,6 +7,7 @@ from app.chat_service.repositories.session_repositories import (
     get_user_sessions_by_session_id,
 )
 from app.chat_service.utils.logger import get_logger
+from app.core.rate_limit import limiter
 
 logger = get_logger(__name__)
 
@@ -49,7 +50,9 @@ def _serialize_message(db_message: dict) -> Dict[str, object]:
 
 
 @router.get("/history")
+@limiter.limit("1/minute")
 def get_chat_history(
+    request: Request,
     session_id: str = Query(...),
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, List[Dict[str, object]]]:

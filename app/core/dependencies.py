@@ -4,7 +4,7 @@ FastAPI authentication dependencies.
 Provides the current authenticated user from JWT tokens.
 """
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.chat_service.utils.logger import get_logger
@@ -16,6 +16,7 @@ security = HTTPBearer()
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
     """
@@ -30,10 +31,17 @@ def get_current_user(
     Raises:
         HTTPException: If token is invalid or expired.
     """
+
+    """
+    Retrieve the currently authenticated user.
+    """
     token = credentials.credentials
 
     try:
         user = verify_access_token(token)
+
+        # 🔑 IMPORTANT: attach user to request state
+        request.state.user = user
 
         logger.info(
             "Authenticated user request",

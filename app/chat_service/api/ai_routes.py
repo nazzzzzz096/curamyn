@@ -14,7 +14,7 @@ import uuid
 import base64
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-
+from fastapi import Request
 from fastapi import (
     APIRouter,
     Depends,
@@ -30,6 +30,7 @@ from app.chat_service.repositories.session_repositories import (
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
 from app.chat_service.utils.logger import get_logger
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import limiter
 
 logger = get_logger(__name__)
 
@@ -40,7 +41,9 @@ ALLOWED_RESPONSE_MODES = {"text", "voice"}
 
 
 @router.post("/interact")
+@limiter.limit("25/minute")
 async def ai_interact(
+    request: Request,
     input_type: str = Form(...),
     session_id: Optional[str] = Form(None),
     response_mode: str = Form("text"),
