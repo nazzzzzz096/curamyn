@@ -151,13 +151,16 @@ def _handle_login(
         )
 
         # =====================
-        # 🔥 NAVIGATION LOGIC
+        #  NAVIGATION LOGIC
         # =====================
-        if any(state.consent.values()):
-            # Consent already given → skip onboarding
+
+        user = login_user(token=state.token)
+
+        if user.get("onboarding_completed"):
             ui.navigate.to("/chat")
+            logger.info("onboarding completed so moving to chat interface")
         else:
-            # First-time user → onboarding
+            logger.info("onboarding started")
             ui.navigate.to("/onboarding")
 
     except Exception:

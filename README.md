@@ -45,28 +45,30 @@ Curamyn is an AI-powered healthcare companion that provides emotional support, m
 │                         Frontend                             │
 │                  (NiceGUI + Tailwind CSS)                   │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP/WebSocket
+                       │ HTTP / WebSocket
 ┌──────────────────────▼──────────────────────────────────────┐
 │                    FastAPI Backend                           │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │              Orchestration Layer                       │  │
-│  │  • Input Router  • Safety Guards  • Session Manager   │  │
+│  │  • Safety Guards • Consent Engine • Sessions           │  │
 │  └─────────┬───────────────┬─────────────────┬───────────┘  │
 │            │               │                 │               │
-│  ┌─────────▼─────┐ ┌──────▼──────┐ ┌───────▼────────┐     │
-│  │  Voice        │ │  Document   │ │  Health        │     │
-│  │  Pipeline     │ │  Understanding│ │  Advisor       │     │
-│  │  • Whisper    │ │  • OCR       │ │  • Educational │     │
-│  │  • Edge-TTS   │ │  • Gemini LLM│ │  • Self-Care   │     │
-│  └───────────────┘ └─────────────┘ └────────────────┘     │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│                    Data Layer                                │
-│  • MongoDB (Sessions, Users, Consent)                       │
-│  • S3 (CNN Models)                                          │
-│  • MLflow (Experiment Tracking)                             │
-└─────────────────────────────────────────────────────────────┘
+│  Voice     │ Document      │ Analytics       │ MLflow       │
+│  Pipeline  │ Understanding │ Metadata Logs   │ Experiments  │
+└────────────┴───────────────┴──────────┬──────┴──────────────┘
+                                         │
+┌────────────────────────────────────────▼────────────────────┐
+│                       Data Layer                             │
+│  MongoDB Atlas (Users, Consent, Sessions)                    │
+│  PostgreSQL (Analytics Warehouse)                             │
+│  S3 (CNN Models)                                             │
+└──────────────────────────────────────────────────────────────┘
+                                         │
+                              ┌──────────▼──────────┐
+                              │     Power BI        │
+                              │   Dashboards        │
+                              └─────────────────────┘
+
 ```
 
 ---
@@ -297,6 +299,64 @@ curamyn/
 ```
 
 ---
+📊 Analytics & ETL Pipeline
+Curamyn includes a production-grade analytics pipeline that transforms operational data into business-ready metrics for monitoring growth, consent usage, and system adoption.
+
+🔄 End-to-End Analytics Flow
+
+ MongoDB Atlas (Operational Data)
+        ↓
+ Incremental Python ETL (EC2 + Docker + Cron)
+        ↓
+ PostgreSQL (Analytics Warehouse)
+        ↓
+ Power BI Dashboards
+
+
+🧠 What Data Is Collected (Privacy-Safe)
+
+Curamyn analytics never store medical content or chat text.
+
+Only aggregated & metadata-level information is collected:
+
+--Daily new users
+
+--Consent usage (voice, memory, document, image)
+
+--User onboarding completion
+
+--Feature adoption trends
+
+--ETL run health (success/failure)
+
+🔁 ETL Design Principles
+
+| Feature            | Implementation                           |
+| ------------------ | ---------------------------------------- |
+| Incremental loads  | Uses last successful `etl_runs.run_time` |
+| Idempotent inserts | `ON CONFLICT DO NOTHING`                 |
+| Daily aggregation  | One row per day (`daily_metrics`)        |
+| Failure safety     | Rollback + failure logging               |
+| Stateless          | Safe to re-run anytime                   |
+| Privacy-first      | No PII, no chat content                  |
+
+📦 ETL Components
+etl/
+├── scripts/
+│   └── etl_run.py        # Incremental ETL logic
+├── etl.log               # ETL execution logs
+├── .env                  # MongoDB & Postgres credentials
+├── venv/                 # Isolated Python environment
+
+
+🧾 Analytics Tables (PostgreSQL)
+
+| Table               | Purpose                           |
+| ------------------- | --------------------------------- |
+| `users_daily`       | User signup tracking              |
+| `consents_snapshot` | Consent state per day             |
+| `daily_metrics`     | Aggregated KPIs (Power BI source) |
+| `etl_runs`          | ETL observability & debugging     |
 
 ## 🤝 Contributing
 
@@ -364,9 +424,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📧 Contact
 
 **Author**: Nazina N  
-**Email**: your.email@example.com  
-**GitHub**: [@yourusername](https://github.com/yourusername)  
-**Project Link**: https://github.com/yourusername/curamyn
+**Email**: nazina096@gmail.com  
+
 
 ---
 
@@ -389,10 +448,3 @@ This system is NOT designed for:
 
 ---
 
-<div align="center">
-
-**Made with ❤️ for better health and wellbeing**
-
-[⭐ Star this repo](https://github.com/yourusername/curamyn) | [🐛 Report Bug](https://github.com/yourusername/curamyn/issues) | [💡 Request Feature](https://github.com/yourusername/curamyn/issues)
-
-</div>
