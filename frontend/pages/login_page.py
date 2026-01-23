@@ -87,7 +87,8 @@ def _handle_login(
     """
     Authenticate the user and navigate to onboarding or chat.
     """
-    if state.get("logging_in"):
+
+    if state.logging_in:
         return
 
     if not email or not password:
@@ -96,21 +97,18 @@ def _handle_login(
 
     state.logging_in = True
     button.disable()
-    button.props("loading")
 
     try:
-        # ---------- LOGIN ----------
         token_data = login_user(email=email, password=password)
 
         state.token = token_data["access_token"]
+        state.user_id = token_data.get("user_id")
         state.session_id = token_data.get("session_id")
 
         ui.run_javascript(f"localStorage.setItem('access_token', '{state.token}');")
 
-        # ---------- LOAD CONSENT ----------
         try:
-            consent = get_consent(token=state.token)
-            state.consent = consent
+            state.consent = get_consent(token=state.token)
         except Exception:
             state.consent = {
                 "memory": False,
@@ -121,19 +119,12 @@ def _handle_login(
 
         ui.notify("Login successful", type="positive")
 
-        # ---------- SAFE NAVIGATION ----------
-        target = "/chat" if any(state.consent.values()) else "/onboarding"
-
-        ui.run_javascript(
-            f"""
-            setTimeout(() => {{
-                window.location.href = "{target}";
-            }}, 100);
-        """
-        )
+        if any(state.consent.values()):
+            ui.navigate.to("/chat")
+        else:
+            ui.navigate.to("/onboarding")
 
     except Exception:
-        logger.exception("Login failed")
         ui.notify("Invalid email or password", type="negative")
 
     finally:

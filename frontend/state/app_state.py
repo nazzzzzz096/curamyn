@@ -6,7 +6,7 @@ class AppState:
     user_id: Optional[str] = None
     session_id: Optional[str] = None
 
-    #  CONSENT IS A DICT NOW
+    # Consent flags
     consent: Dict[str, bool] = {
         "memory": False,
         "voice": False,
@@ -16,6 +16,9 @@ class AppState:
 
     # Chat history
     messages: List[dict] = []
+
+    #  UI / FLOW STATE
+    logging_in: bool = False
 
 
 state = AppState()
