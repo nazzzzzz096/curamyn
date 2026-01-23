@@ -87,88 +87,55 @@ def _handle_login(
     """
     Authenticate the user and navigate to onboarding or chat.
     """
-    if not email or not password:
-        ui.notify(
-            "Please enter both email and password",
-            type="warning",
-        )
+    if state.get("logging_in"):
         return
 
-    logger.info(
-        "Login attempt initiated",
-        extra={"email": email},
-    )
+    if not email or not password:
+        ui.notify("Please enter both email and password", type="warning")
+        return
 
+    state.logging_in = True
     button.disable()
+    button.props("loading")
 
     try:
-        token_data = login_user(
-            email=email,
-            password=password,
-        )
+        # ---------- LOGIN ----------
+        token_data = login_user(email=email, password=password)
 
-        # =====================
-        # Store auth state
-        # =====================
         state.token = token_data["access_token"]
-        state.user_id = token_data.get("user_id")
         state.session_id = token_data.get("session_id")
 
-        ui.run_javascript(
-            f"""
-            localStorage.setItem('access_token', '{state.token}');
-            """
-        )
+        ui.run_javascript(f"localStorage.setItem('access_token', '{state.token}');")
 
-        # =====================
-        # 🔥 LOAD CONSENT FROM BACKEND
-        # =====================
+        # ---------- LOAD CONSENT ----------
         try:
             consent = get_consent(token=state.token)
             state.consent = consent
-            logger.info("Consent loaded", extra={"consent": consent})
-
-            # Optional: persist in browser
-            ui.run_javascript(
-                f"""
-                localStorage.setItem('consent', '{json.dumps(consent)}');
-                """
-            )
-
         except Exception:
-            # If no consent exists yet
             state.consent = {
                 "memory": False,
                 "voice": False,
                 "document": False,
                 "image": False,
             }
-            logger.info("No existing consent found")
 
-        ui.notify(
-            "Login successful",
-            type="positive",
+        ui.notify("Login successful", type="positive")
+
+        # ---------- SAFE NAVIGATION ----------
+        target = "/chat" if any(state.consent.values()) else "/onboarding"
+
+        ui.run_javascript(
+            f"""
+            setTimeout(() => {{
+                window.location.href = "{target}";
+            }}, 100);
+        """
         )
-
-        # =====================
-        #  NAVIGATION LOGIC
-        # =====================
-
-        user = login_user(token=state.token)
-
-        if user.get("onboarding_completed"):
-            ui.navigate.to("/chat")
-            logger.info("onboarding completed so moving to chat interface")
-        else:
-            logger.info("onboarding started")
-            ui.navigate.to("/onboarding")
 
     except Exception:
         logger.exception("Login failed")
-        ui.notify(
-            "Invalid email or password",
-            type="negative",
-        )
+        ui.notify("Invalid email or password", type="negative")
 
     finally:
+        state.logging_in = False
         button.enable()

@@ -1,12 +1,8 @@
 from nicegui import ui
-
-from frontend.api.onboarding_client import (
-    get_next_question,
-    submit_answer,
-)
+from frontend.api.onboarding_client import get_next_question, submit_answer
+from frontend.api.consent_client import update_consent
 from frontend.state.app_state import state
 from frontend.utils.logger import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -19,7 +15,6 @@ def show_onboarding_page() -> None:
     the user to chat upon completion.
     """
     if not state.token:
-        logger.warning("Onboarding page accessed without authentication")
         ui.navigate.to("/login")
         return
 
@@ -27,33 +22,26 @@ def show_onboarding_page() -> None:
         "flex justify-center items-center min-h-screen w-full bg-[#0f172a]"
     ):
         card = ui.card().classes(
-            "w-full max-w-2xl bg-[#111827] text-white "
-            "shadow-xl rounded-2xl p-8 mx-auto"
+            "w-full max-w-2xl bg-[#111827] text-white shadow-xl rounded-2xl p-8"
         )
-
         render_question(card)
 
 
 def render_question(card) -> None:
     """Clear the card and render the next onboarding question."""
-    logger.debug("Rendering onboarding question")
-
     card.clear()
 
     try:
         data = get_next_question(token=state.token)
     except Exception:
-        logger.exception("Failed to fetch onboarding question")
         ui.notify("Failed to load onboarding question", type="negative")
+        logger.exception("Failed to load onboarding question")
         return
 
     if data.get("completed"):
-        logger.info("Onboarding completed")
-        ui.notify("Onboarding completed", type="positive")
-        ui.navigate.to("/chat")
+        finalize_onboarding()
         return
 
-    #  IMPORTANT: render INSIDE card
     with card:
         ui.label(data["question_text"]).classes(
             "text-xl font-semibold mb-8 text-center"
@@ -66,62 +54,66 @@ def render_question(card) -> None:
         )
 
         with ui.row().classes("justify-between mt-8"):
-            ui.button(
-                "Skip",
-                on_click=lambda: submit_and_reload(
-                    card=card,
-                    question_key=data["question_key"],
-                    value="",
-                ),
-            ).props("flat").classes("text-gray-400")
+            skip_btn = ui.button("Skip").props("flat").classes("text-gray-400")
+            next_btn = ui.button("Next").classes(
+                "bg-emerald-600 text-white font-semibold"
+            )
 
-            ui.button(
-                "Next",
-                on_click=lambda: submit_and_reload(
-                    card=card,
-                    question_key=data["question_key"],
-                    value=answer_input.value,
-                ),
-            ).classes("bg-emerald-600 text-white font-semibold")
+            skip_btn.on_click(
+                lambda: submit_and_continue(card, data["question_key"], "")
+            )
+            next_btn.on_click(
+                lambda: submit_and_continue(
+                    card,
+                    data["question_key"],
+                    answer_input.value,
+                )
+            )
 
 
-def submit_and_reload(
-    *,
-    card,
-    question_key: str,
-    value: str | None,
-) -> None:
+def submit_and_continue(card, question_key: str, answer: str):
     """
-    Submit the user's answer (or skip) and load the next question.
+     Submit the user's answer (or skip) and load the next question.
 
     Args:
         card: UI container holding the question content.
         question_key: Identifier for the current question.
         value: User answer or None if skipped.
     """
-    logger.info(
-        "Submitting onboarding answer",
-        extra={
-            "question_key": question_key,
-            "has_answer": value is not None,
-        },
-    )
+    card.disable()
+
     try:
         submit_answer(
             token=state.token,
             question_key=question_key,
-            answer=value,
+            answer=answer,
         )
+        render_question(card)
     except Exception:
-        logger.exception("Failed to submit onboarding answer")
-        ui.notify("Failed to submit answer. Please try again.", type="negative")
-        return
+        ui.notify("Failed to submit answer", type="negative")
+        logger.exception("Submit failed")
+    finally:
+        card.enable()
 
-    #  After submit, fetch next question
-    data = get_next_question(token=state.token)
 
-    if data.get("completed"):
-        ui.navigate.to("/chat")
-        return
+def finalize_onboarding():
+    logger.info("Onboarding completed")
 
-    render_question(card)
+    #  Mark consent as completed
+    update_consent(
+        token=state.token,
+        memory=True,
+        voice=False,
+        document=False,
+        image=False,
+    )
+
+    ui.notify("Onboarding completed 🎉", type="positive")
+
+    ui.run_javascript(
+        """
+        setTimeout(() => {
+            window.location.href = "/chat";
+        }, 100);
+    """
+    )
