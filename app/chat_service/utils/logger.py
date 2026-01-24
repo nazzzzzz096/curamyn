@@ -6,7 +6,6 @@ Provides a consistent, structured logger across the application.
 
 import logging
 import os
-import sys
 from typing import Optional
 
 # Read log level from environment (default: INFO)
@@ -30,12 +29,10 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    # Use StreamHandler with stderr for errors
-    handler = logging.StreamHandler(sys.stderr)
+    handler = logging.StreamHandler()
 
-    # Enhanced formatter with emoji indicators
     formatter = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
