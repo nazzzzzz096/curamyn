@@ -99,14 +99,27 @@ def submit_and_continue(card, question_key: str, answer: str):
 def finalize_onboarding():
     logger.info("Onboarding completed")
 
-    #  Mark consent as completed
-    update_consent(
-        token=state.token,
-        memory=True,
-        voice=False,
-        document=False,
-        image=False,
-    )
+    # ✅ Set default consent preferences
+    try:
+        update_consent(
+            token=state.token,
+            consent_data={
+                "memory": True,  # Enable memory by default
+                "voice": False,
+                "document": False,
+                "image": False,
+            },
+        )
+
+        state.consent = {
+            "memory": True,
+            "voice": False,
+            "document": False,
+            "image": False,
+        }
+
+    except Exception:
+        logger.exception("Failed to set default consent")
 
     ui.notify("Onboarding completed 🎉", type="positive")
 
@@ -114,6 +127,6 @@ def finalize_onboarding():
         """
         setTimeout(() => {
             window.location.href = "/chat";
-        }, 100);
+        }, 500);
     """
     )

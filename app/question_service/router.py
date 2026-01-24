@@ -113,3 +113,36 @@ def answer_question(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to save answer",
         ) from exc
+
+
+@router.get(
+    "/status",
+    response_model=QuestionResponse,
+)
+def get_onboarding_status(
+    current_user: dict = Depends(get_current_user),
+) -> QuestionResponse:
+    """
+    Check if user has completed onboarding.
+
+    Returns:
+        QuestionResponse with completed=True if done, False otherwise
+    """
+    user_id = current_user["sub"]
+
+    try:
+        logger.info(
+            "Checking onboarding status",
+            extra={"user_id": user_id},
+        )
+        return get_next_question(user_id)
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to check onboarding status",
+            extra={"user_id": user_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to check onboarding status",
+        ) from exc

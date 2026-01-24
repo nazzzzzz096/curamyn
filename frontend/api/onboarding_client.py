@@ -120,3 +120,43 @@ def submit_answer(
     except ValueError as exc:
         logger.exception("Invalid response received after submitting answer")
         raise QuestionsApiError("Invalid response from questions service") from exc
+
+
+def check_onboarding_status(*, token: str) -> Dict[str, Any]:
+    """
+    Check if user has completed onboarding.
+
+    Args:
+        token: JWT access token.
+
+    Returns:
+        A dictionary containing completion status.
+
+    Raises:
+        QuestionsApiError: On request or backend failure.
+    """
+    url = f"{API_BASE_URL}/questions/status"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    logger.info("Checking onboarding completion status")
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    except RequestException as exc:
+        logger.exception("Failed to check onboarding status")
+        raise QuestionsApiError("Unable to check onboarding status") from exc
+
+    except ValueError as exc:
+        logger.exception("Invalid response received for onboarding status")
+        raise QuestionsApiError("Invalid response from questions service") from exc

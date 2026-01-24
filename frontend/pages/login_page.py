@@ -107,9 +107,11 @@ def _handle_login(
 
         ui.run_javascript(f"localStorage.setItem('access_token', '{state.token}');")
 
+        # Load user consent
         try:
             state.consent = get_consent(token=state.token)
         except Exception:
+            logger.exception("Failed to load consent")
             state.consent = {
                 "memory": False,
                 "voice": False,
@@ -119,13 +121,33 @@ def _handle_login(
 
         ui.notify("Login successful", type="positive")
 
-        if any(state.consent.values()):
-            ui.navigate.to("/chat")
-        else:
+        # ✅ CHECK ONBOARDING COMPLETION STATUS
+        try:
+            from frontend.api.onboarding_client import check_onboarding_status
+
+            onboarding_status = check_onboarding_status(token=state.token)
+
+            if onboarding_status.get("completed", False):
+                # User has completed onboarding → go to chat
+                logger.info("User has completed onboarding, redirecting to chat")
+                ui.navigate.to("/chat")
+            else:
+                # User hasn't completed onboarding → go to onboarding
+                logger.info(
+                    "User hasn't completed onboarding, redirecting to onboarding"
+                )
+                ui.navigate.to("/onboarding")
+
+        except Exception:
+            logger.exception(
+                "Failed to check onboarding status, defaulting to onboarding"
+            )
+            # On error, send to onboarding to be safe
             ui.navigate.to("/onboarding")
 
     except Exception:
         ui.notify("Invalid email or password", type="negative")
+        logger.exception("Login failed")
 
     finally:
         state.logging_in = False

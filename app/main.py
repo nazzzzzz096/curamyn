@@ -166,3 +166,24 @@ logger.info(
 @app.get("/health", tags=["health"])
 def health_check() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health/db", tags=["health"])
+def database_health_check() -> dict:
+    """
+    Check MongoDB connection health.
+
+    Returns detailed information about the database connection status.
+    """
+    from app.db.mongodb import check_connection_health
+
+    health_status = check_connection_health()
+
+    # Return 503 if database is unhealthy
+    if health_status["status"] != "connected":
+        from fastapi import Response
+
+        response = Response(status_code=503)
+        return health_status
+
+    return health_status
