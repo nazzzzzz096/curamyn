@@ -8,12 +8,7 @@ logger = get_logger(__name__)
 
 
 def show_onboarding_page() -> None:
-    """
-    Render the onboarding page.
-
-    Displays one question at a time and navigates
-    the user to chat upon completion.
-    """
+    """Render the onboarding page."""
     if not state.token:
         ui.navigate.to("/login")
         return
@@ -27,15 +22,15 @@ def show_onboarding_page() -> None:
         render_question(card)
 
 
-def render_question(card) -> None:
+def render_question(card: ui.card) -> None:
     """Clear the card and render the next onboarding question."""
     card.clear()
 
     try:
         data = get_next_question(token=state.token)
-    except Exception:
-        ui.notify("Failed to load onboarding question", type="negative")
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to load onboarding question")
+        ui.notify("Failed to load onboarding question", type="negative")
         return
 
     if data.get("completed"):
@@ -53,34 +48,39 @@ def render_question(card) -> None:
             .classes("w-full")
         )
 
-        with ui.row().classes("justify-between mt-8"):
+        with ui.row().classes("justify-between mt-8") as actions_row:
             skip_btn = ui.button("Skip").props("flat").classes("text-gray-400")
             next_btn = ui.button("Next").classes(
                 "bg-emerald-600 text-white font-semibold"
             )
 
             skip_btn.on_click(
-                lambda: submit_and_continue(card, data["question_key"], "")
+                lambda: submit_and_continue(
+                    card,
+                    actions_row,
+                    data["question_key"],
+                    "",
+                )
             )
+
             next_btn.on_click(
                 lambda: submit_and_continue(
                     card,
+                    actions_row,
                     data["question_key"],
                     answer_input.value,
                 )
             )
 
 
-def submit_and_continue(card, question_key: str, answer: str):
-    """
-     Submit the user's answer (or skip) and load the next question.
-
-    Args:
-        card: UI container holding the question content.
-        question_key: Identifier for the current question.
-        value: User answer or None if skipped.
-    """
-    card.disable()
+def submit_and_continue(
+    card: ui.card,
+    actions_row: ui.row,
+    question_key: str,
+    answer: str,
+) -> None:
+    """Submit the user's answer and load the next question."""
+    set_actions_enabled(actions_row, enabled=False)
 
     try:
         submit_answer(
@@ -89,28 +89,39 @@ def submit_and_continue(card, question_key: str, answer: str):
             answer=answer,
         )
         render_question(card)
-    except Exception:
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "Failed to submit onboarding answer | question_key=%s",
+            question_key,
+        )
         ui.notify("Failed to submit answer", type="negative")
-        logger.exception("Submit failed")
+
     finally:
-        card.enable()
+        set_actions_enabled(actions_row, enabled=True)
 
 
-def finalize_onboarding():
+def set_actions_enabled(row: ui.row, *, enabled: bool) -> None:
+    """Enable or disable all buttons inside a row."""
+    for element in row.default_slot.children:
+        if hasattr(element, "enabled"):
+            element.enabled = enabled
+
+
+def finalize_onboarding() -> None:
+    """Finalize onboarding and navigate to chat."""
     logger.info("Onboarding completed")
 
-    # ✅ Set default consent preferences
     try:
         update_consent(
             token=state.token,
             consent_data={
-                "memory": True,  # Enable memory by default
+                "memory": True,
                 "voice": False,
                 "document": False,
                 "image": False,
             },
         )
-
         state.consent = {
             "memory": True,
             "voice": False,
@@ -118,15 +129,14 @@ def finalize_onboarding():
             "image": False,
         }
 
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to set default consent")
 
     ui.notify("Onboarding completed 🎉", type="positive")
-
     ui.run_javascript(
         """
         setTimeout(() => {
             window.location.href = "/chat";
         }, 500);
-    """
+        """
     )
