@@ -50,7 +50,7 @@ def explain_medical_terms(
     Explain medical terms from the user's uploaded document.
 
     STRICT RULES:
-    - Only explain terms that appear in the document
+    - Answer questions about terms, values, or ranges in the document
     - Do NOT diagnose
     - Do NOT say if results are normal/abnormal
     - Educational purpose only
@@ -83,28 +83,46 @@ def explain_medical_terms(
         if user_id:
             mlflow_safe(mlflow.set_tag, "user_id", user_id)
 
-        prompt = f"""You are a medical terminology educator.
+        prompt = f"""You are a medical terminology educator helping someone understand their lab report.
 
-USER'S DOCUMENT (for reference only):
+USER'S DOCUMENT (for reference):
 {document_text}
 
 USER'S QUESTION:
 {question}
 
 STRICT RULES:
-1. ONLY explain terms that appear in the user's document above
-2. Do NOT diagnose or interpret the results
-3. Do NOT say if values are normal, abnormal, high, or low
-4. Do NOT give medical advice
-5. ONLY provide educational information about what the term means
+1. Answer ANY question related to the document content
+2. This includes:
+   - What medical terms mean (e.g., "What is hemoglobin?")
+   - What normal/reference ranges mean (e.g., "What is the normal range for hemoglobin?")
+   - What units mean (e.g., "What does g/dL mean?")
+   - What test categories mean (e.g., "What is a CBC?")
+   - General education about tests in the document
 
-If the user asks about a term NOT in their document, say:
-"I can only explain terms from your uploaded document. That term doesn't appear in your report."
+3. Do NOT:
+   - Diagnose conditions
+   - Interpret if the USER'S specific values are normal/abnormal
+   - Provide medical advice
+   - Recommend treatments
 
-If the user asks for diagnosis or interpretation, say:
-"I can explain what the terms mean, but I cannot interpret your results or provide a diagnosis. Please consult your healthcare provider."
+4. Acceptable to say:
+   ✅ "Hemoglobin is a protein in red blood cells that carries oxygen. The normal range for adults is typically 12-16 g/dL for women and 14-18 g/dL for men."
+   ✅ "TSH stands for Thyroid Stimulating Hormone. Normal ranges are usually 0.4-4.0 mIU/L."
+   ✅ "WBC count measures white blood cells which fight infection."
 
-Provide a clear, simple explanation in 2-3 sentences."""
+5. NOT acceptable:
+   ❌ "Your hemoglobin of 10.8 is low, you might have anemia"
+   ❌ "This result is abnormal"
+   ❌ "You should take iron supplements"
+
+If the question is about a term NOT in the document, say:
+"That term doesn't appear in your uploaded document. I can only explain terms from your report."
+
+If the user asks for diagnosis or interpretation of THEIR values, say:
+"I can explain what the term means and what normal ranges typically are, but I cannot interpret your specific results or diagnose conditions. Please discuss your results with your healthcare provider."
+
+Provide a clear, educational explanation in 2-4 sentences."""
 
         try:
             response = client.models.generate_content(

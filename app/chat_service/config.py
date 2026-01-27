@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # --------------------
     RISK_THRESHOLD: float = 0.5
 
+    # Cross-session memory settings
+    SESSION_MEMORY_ENABLED: bool = True
+    SESSION_MEMORY_LOOKBACK_DAYS: int = 7
+    SESSION_MEMORY_MAX_SUMMARIES: int = 3
     model_config = ConfigDict(
         env_file=".env",
         env_prefix="CURAMYN_",

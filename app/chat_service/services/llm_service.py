@@ -186,21 +186,31 @@ def _generate_spoken_response(
     PROMPTS = {
         "low": f"""
 You are a friendly conversational companion.
-Reply in 2–4 short sentences.
+
+IMPORTANT:
+- If the user references previous conversations, acknowledge it warmly
+- Use any provided context to maintain continuity
+- Reply in 2–4 short sentences.
 
 User:
 {text}
 """,
         "moderate": f"""
 You are a calm and understanding listener.
-Reply in 2–3 sentences.
+
+IMPORTANT:
+- If the user mentions previous discussions, show you remember
+- Reply in 2–3 sentences.
 
 User:
 {text}
 """,
         "high": f"""
 You are a grounding, supportive presence.
-Reply in 1–2 calm sentences.
+
+IMPORTANT:
+- If the user references past conversations, acknowledge it with care
+- Reply in 1–2 calm sentences.
 
 User:
 {text}

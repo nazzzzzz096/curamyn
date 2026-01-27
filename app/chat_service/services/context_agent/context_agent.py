@@ -9,6 +9,7 @@ This module intentionally avoids injecting raw medical facts
 """
 
 from typing import List
+from datetime import datetime, timezone
 
 from app.chat_service.utils.logger import get_logger
 from app.chat_service.services.context_agent.summary_provider import (
@@ -43,9 +44,11 @@ class ContextAgent:
         """
         Build conversation-aware input for the LLM.
 
-        This method merges recent conversation history, session summaries,
-        and abstracted onboarding signals to guide tone and sensitivity
-        while ensuring the response focuses on the user's current message.
+        This method merges:
+        - Previous session summaries (cross-session memory)
+        - Recent conversation history (current session)
+        - Session summaries (long-term context)
+        - Abstracted onboarding signals
 
         Args:
             user_input: The current user message.
@@ -60,7 +63,69 @@ class ContextAgent:
         """
 
         # -------------------------------
-        # 1. SHORT-TERM CONTEXT (RECENT CHAT)
+        # 1. PREVIOUS SESSIONS (NEW!)
+        # -------------------------------
+        previous_sessions_block = ""
+
+        if user_id:
+            try:
+                from app.chat_service.repositories.session_repositories import (
+                    get_recent_session_summaries,
+                )
+
+                recent_summaries = get_recent_session_summaries(
+                    user_id=user_id,
+                    limit=3,  # Last 3 sessions
+                    days=7,  # Within last 7 days
+                )
+
+                if recent_summaries:
+                    previous_lines = []
+
+                    for idx, summary_doc in enumerate(recent_summaries, 1):
+                        summary = summary_doc.get("summary", {})
+                        created_at = summary_doc.get("created_at")
+
+                        # Format timestamp
+                        if created_at:
+                            time_ago = _format_time_ago(created_at)
+                            previous_lines.append(f"\nSession {idx} ({time_ago}):")
+                        else:
+                            previous_lines.append(f"\nSession {idx}:")
+
+                        # Add summary text
+                        summary_text = summary.get("summary_text")
+                        if summary_text:
+                            previous_lines.append(f"  {summary_text}")
+
+                        # Add key signals
+                        emotion = summary.get("primary_emotion")
+                        if emotion:
+                            previous_lines.append(f"  Emotional state: {emotion}")
+
+                        severity = summary.get("severity_peak")
+                        if severity and severity != "low":
+                            previous_lines.append(f"  Severity: {severity}")
+
+                    if previous_lines:
+                        previous_sessions_block = "\n".join(previous_lines)
+
+                        logger.debug(
+                            "Injected previous session summaries",
+                            extra={
+                                "session_id": session_id,
+                                "summaries_count": len(recent_summaries),
+                            },
+                        )
+
+            except Exception:
+                logger.exception(
+                    "Failed to load previous session summaries",
+                    extra={"session_id": session_id},
+                )
+
+        # -------------------------------
+        # 2. SHORT-TERM CONTEXT (RECENT CHAT)
         # -------------------------------
         recent_turns = session_state.last_messages[-6:]
         history_block = "\n".join(
@@ -70,7 +135,7 @@ class ContextAgent:
         )
 
         # -------------------------------
-        # 2. SAFE USER AWARENESS (ONBOARDING)
+        # 3. SAFE USER AWARENESS (ONBOARDING)
         # -------------------------------
         awareness_lines: List[str] = []
 
@@ -117,7 +182,7 @@ class ContextAgent:
         awareness_block = "\n".join(awareness_lines)
 
         # -------------------------------
-        # 3. LONG-TERM CONTEXT (SESSION SUMMARY)
+        # 4. LONG-TERM CONTEXT (CURRENT SESSION SUMMARY)
         # -------------------------------
         summary_text = ""
         if user_id:
@@ -139,7 +204,7 @@ class ContextAgent:
                 )
 
         # -------------------------------
-        # 4. NON-MEDICAL SYSTEM HINTS
+        # 5. NON-MEDICAL SYSTEM HINTS
         # -------------------------------
         hints: List[str] = []
 
@@ -154,18 +219,24 @@ class ContextAgent:
         hint_block = "\n".join(hints)
 
         # -------------------------------
-        # 5. CONTEXT ASSEMBLY (ONLY IF PRESENT)
+        # 6. CONTEXT ASSEMBLY (ONLY IF PRESENT)
         # -------------------------------
         blocks: List[str] = []
+
+        # ✅ NEW: Previous sessions first
+        if previous_sessions_block:
+            blocks.append(
+                f"Previous conversations (for continuity):\n{previous_sessions_block}"
+            )
 
         if awareness_block:
             blocks.append(f"Support considerations:\n{awareness_block}")
 
         if history_block:
-            blocks.append(f"Conversation so far:\n{history_block}")
+            blocks.append(f"Current conversation:\n{history_block}")
 
         if summary_text:
-            blocks.append(f"Previous session summary:\n{summary_text}")
+            blocks.append(f"Current session summary:\n{summary_text}")
 
         if hint_block:
             blocks.append(f"System hints:\n{hint_block}")
@@ -184,6 +255,7 @@ class ContextAgent:
             extra={
                 "session_id": session_id,
                 "context_blocks": len(blocks),
+                "has_previous_sessions": bool(previous_sessions_block),
             },
         )
 
@@ -195,9 +267,43 @@ class ContextAgent:
 --- END CONTEXT ---
 
 IMPORTANT:
-Respond primarily to the CURRENT user message.
-Follow all assistant rules strictly.
+1. If the user references previous conversations ("last time", "we talked about"), acknowledge it using the previous session summaries above
+2. Respond primarily to the CURRENT user message
+3. Use previous context to provide continuity of care
+4. Follow all assistant rules strictly
 
 User message:
 {user_input}
 """.strip()
+
+
+def _format_time_ago(dt: datetime) -> str:
+    """
+    Format datetime as human-readable time ago.
+
+    Args:
+        dt: Datetime object
+
+    Returns:
+        Human-readable string like "2 days ago"
+    """
+    now = datetime.now(timezone.utc)
+
+    # Ensure dt is timezone-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    diff = now - dt
+
+    days = diff.days
+    hours = diff.seconds // 3600
+    minutes = (diff.seconds % 3600) // 60
+
+    if days > 0:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    elif hours > 0:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif minutes > 0:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        return "just now"

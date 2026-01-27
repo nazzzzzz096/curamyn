@@ -245,3 +245,61 @@ def delete_chat_sessions_by_user(user_id: str) -> int:
             extra={"user_id": user_id},
         )
         return 0
+
+
+def get_recent_session_summaries(
+    user_id: str,
+    limit: int = 3,
+    days: int = 7,
+) -> List[Dict]:
+    """
+    Fetch recent session summaries for a user.
+
+    Args:
+        user_id: User identifier
+        limit: Maximum number of summaries to return
+        days: Look back this many days
+
+    Returns:
+        List of recent session summaries, newest first
+    """
+    try:
+        from datetime import timedelta
+
+        collection = get_collection("session_summaries")
+
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+        summaries = list(
+            collection.find(
+                {
+                    "user_id": user_id,
+                    "created_at": {"$gte": cutoff_date},
+                },
+                {
+                    "_id": 0,
+                    "session_id": 1,
+                    "summary": 1,
+                    "created_at": 1,
+                },
+            )
+            .sort("created_at", -1)  # Newest first
+            .limit(limit)
+        )
+
+        logger.info(
+            "Retrieved recent session summaries",
+            extra={
+                "user_id": user_id,
+                "count": len(summaries),
+                "days_back": days,
+            },
+        )
+
+        return summaries
+
+    except PyMongoError as exc:
+        logger.exception(
+            "Failed to retrieve session summaries", extra={"user_id": user_id}
+        )
+        return []

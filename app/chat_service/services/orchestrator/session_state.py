@@ -37,11 +37,14 @@ class SessionState:
         self.emotions: List[str] = []
         self.sentiments: List[str] = []
         self.started_at = datetime.now(timezone.utc)
+
         # Image-related context
         self.last_image_analysis: Optional[dict] = None
         self.last_document_text: Optional[str] = None
+        self.document_uploaded_at: Optional[float] = None
         self.recent_topics: list[str] = []
         self.last_user_question: str | None = None
+
         # Activity tracking
         self.last_activity: float = time.time()
         self.has_health_context: bool = False
@@ -69,6 +72,31 @@ class SessionState:
     def touch(self) -> None:
         """Update last activity timestamp."""
         self.last_activity = time.time()
+
+    def clear_document_context(self) -> None:
+        """
+        Clear document-related context.
+        Called when user moves to a different topic.
+        """
+        self.last_document_text = None
+        self.document_uploaded_at = None
+        logger.info("Document context cleared", extra={"session_id": self.session_id})
+
+    def is_document_context_stale(self, max_age_seconds: int = 300) -> bool:
+        """
+        Check if document context is too old (default 5 minutes).
+
+        Args:
+            max_age_seconds: Maximum age in seconds before context is stale
+
+        Returns:
+            True if context should be cleared
+        """
+        if not self.document_uploaded_at:
+            return False
+
+        age = time.time() - self.document_uploaded_at
+        return age > max_age_seconds
 
     def update_from_llm(self, llm_result: dict) -> None:
         """

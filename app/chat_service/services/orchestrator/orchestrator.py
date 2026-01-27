@@ -10,7 +10,7 @@ This module coordinates:
 """
 
 from typing import Any, Dict
-
+from datetime import time
 from app.chat_service.services.orchestrator.input_router import route_input
 from app.chat_service.services.orchestrator.session_state import SessionState
 from app.chat_service.services.orchestrator.response_builder import build_response
@@ -194,61 +194,226 @@ def _emergency_response() -> Dict[str, str]:
     }
 
 
-def _is_asking_about_medical_terms(text: str) -> bool:
+def _is_asking_about_medical_terms(text: str, document_text: str = "") -> bool:
     """
-    Detect if user is asking about medical terminology.
+    Detect if user is asking about medical terminology or document content.
 
-    Keywords that indicate educational questions:
-    - what is, what does, what are
-    - explain, define, meaning
-    - rbc, wbc, hemoglobin, mcv, mch, etc.
+    This function should return True for:
+    - "What is hemoglobin?"
+    - "What is the normal range for hemoglobin?"
+    - "Why is my TSH high?"
+    - "Is my WBC count okay?"
+    - "Should I be worried about RBC?"
+    - "Explain my platelet count"
+
+    Args:
+        text: User's question
+        document_text: The uploaded document text (to check if terms are in document)
+
+    Returns:
+        True if question is about medical terms/document content
     """
     text_lower = text.lower()
 
-    # Question patterns
+    # ===== PATTERN 1: Direct Questions =====
     question_patterns = [
         "what is",
         "what does",
         "what are",
         "what's",
+        "whats",
         "explain",
         "define",
         "meaning of",
-        "means",
-        "stand for",
+        "what do you mean by",
         "tell me about",
+        "can you explain",
     ]
 
-    # Medical term indicators
+    # ===== PATTERN 2: Concern/Interpretation Questions =====
+    concern_patterns = [
+        "is my",
+        "should i be worried",
+        "is this normal",
+        "is this okay",
+        "is this bad",
+        "is this good",
+        "why is my",
+        "what does it mean",
+        "does this mean",
+        "is it concerning",
+        "is it serious",
+    ]
+
+    # ===== PATTERN 3: Range/Value Questions =====
+    range_patterns = [
+        "normal range",
+        "reference range",
+        "should be",
+        "supposed to be",
+        "ideal level",
+        "healthy level",
+        "target range",
+    ]
+
+    # ===== Medical Terms (from document context) =====
     medical_terms = [
+        # Blood count terms
         "rbc",
         "wbc",
         "hemoglobin",
+        "haemoglobin",
+        "hb",
         "platelet",
         "mcv",
         "mch",
         "mchc",
+        "rdw",
         "neutrophil",
         "lymphocyte",
         "monocyte",
         "eosinophil",
         "basophil",
         "hematocrit",
+        "haematocrit",
         "differential",
+        # Thyroid terms
+        "tsh",
+        "t3",
+        "t4",
+        "free t3",
+        "free t4",
+        "thyroid",
+        # Metabolic terms
+        "glucose",
+        "blood sugar",
+        "hba1c",
+        "a1c",
+        "cholesterol",
+        "hdl",
+        "ldl",
+        "triglyceride",
+        "creatinine",
+        "urea",
+        "bun",
+        # Liver terms
+        "alt",
+        "ast",
+        "alp",
+        "bilirubin",
+        "ggt",
+        "sgot",
+        "sgpt",
+        "liver enzyme",
+        # Minerals/Electrolytes
+        "sodium",
+        "potassium",
+        "calcium",
+        "magnesium",
+        "iron",
+        "ferritin",
+        "vitamin",
+        # General terms
         "count",
-        "cells",
-        "range",
-        "reference",
-        "normal",
-        "test",
+        "level",
         "result",
         "value",
+        "test",
+        "cells",
+        "mg/dl",
+        "g/dl",
+        "mmol/l",
+        "µl",
+        "ul",
     ]
 
-    has_question = any(pattern in text_lower for pattern in question_patterns)
+    # ===== DETECTION LOGIC =====
+
+    # Check if any question pattern exists
+    has_question_pattern = any(pattern in text_lower for pattern in question_patterns)
+    has_concern_pattern = any(pattern in text_lower for pattern in concern_patterns)
+    has_range_pattern = any(pattern in text_lower for pattern in range_patterns)
+
+    # Check if medical terms are mentioned
     has_medical_term = any(term in text_lower for term in medical_terms)
 
-    return has_question and has_medical_term
+    # ✅ MATCH 1: Direct questions about medical terms
+    # Example: "What is hemoglobin?"
+    if has_question_pattern and has_medical_term:
+        return True
+
+    # ✅ MATCH 2: Concern/interpretation questions
+    # Example: "Is my hemoglobin okay?" or "Why is my TSH high?"
+    if has_concern_pattern and has_medical_term:
+        return True
+
+    # ✅ MATCH 3: Range/value questions
+    # Example: "What is the normal range for hemoglobin?"
+    if has_range_pattern and has_medical_term:
+        return True
+
+    # ✅ MATCH 4: Check if question references document content
+    # Example: "What about the result in my report?"
+    document_references = [
+        "my report",
+        "my test",
+        "my results",
+        "in my",
+        "from my",
+        "this report",
+        "the report",
+        "the test",
+        "these results",
+    ]
+
+    if any(ref in text_lower for ref in document_references):
+        return True
+
+    #  MATCH 5: Very short questions that likely refer to document context
+    # Example: After seeing a report, user just asks "Normal range?"
+    words = text_lower.split()
+    if len(words) <= 4 and has_medical_term:
+        return True
+
+    return False
+
+
+def _is_topic_change(text: str) -> bool:
+    """
+    Detect if user is changing topics away from document discussion.
+
+    Args:
+        text: User's message
+
+    Returns:
+        True if user is clearly changing topics
+    """
+    text_lower = text.lower()
+
+    # Phrases indicating topic change
+    topic_change_indicators = [
+        "i want to talk about",
+        "can we discuss",
+        "let's talk about",
+        "i have a question about",
+        "i'm feeling",
+        "i feel",
+        "i've been",
+        "help me with",
+        "i need help",
+        "can you help me",
+        "advice",
+        "stressed",
+        "anxious",
+        "worried",
+        "tired",
+        "sleep",
+        "exercise",
+        "diet",
+        "nutrition",
+    ]
+
+    return any(indicator in text_lower for indicator in topic_change_indicators)
 
 
 def _route_llm(
@@ -271,6 +436,8 @@ def _route_llm(
     # DOCUMENT OCR
     # ==========================================================
     if input_type == "image" and image_type == "document":
+        #  Store document upload timestamp
+        state.document_uploaded_at = time.time()
         return analyze_ocr_text(text=normalized_text, user_id=user_id)
 
     # ==========================================================
@@ -283,21 +450,59 @@ def _route_llm(
         }
 
     # ==========================================================
-    # EDUCATIONAL MODE (Follow-up questions about document)
+    # TEXT INPUT - SMART ROUTING
     # ==========================================================
-    if input_type == "text" and state.last_document_text:
-        if _is_asking_about_medical_terms(normalized_text):
-            logger.info("Routing to educational LLM (term explanation)")
-            return explain_medical_terms(
-                question=normalized_text,
-                document_text=state.last_document_text,
+    if input_type == "text":
+
+        #  CHECK 1: Is user explicitly changing topics?
+        if _is_topic_change(normalized_text):
+            logger.info("Topic change detected - clearing document context")
+            state.clear_document_context()
+            # Route to health advisor
+            return analyze_health_text(
+                text=normalized_text,
                 user_id=user_id,
             )
 
-    # ==========================================================
-    # HEALTH TEXT (Default - Self-care mode)
-    # ==========================================================
-    return analyze_health_text(
-        text=normalized_text,
-        user_id=user_id,
-    )
+        #  CHECK 2: Is document context too old?
+        if state.last_document_text and state.is_document_context_stale(
+            max_age_seconds=600
+        ):  # 10 minutes
+            logger.info("Document context expired (>10 minutes) - clearing")
+            state.clear_document_context()
+
+        #  CHECK 3: Educational mode
+        if state.last_document_text:
+            is_medical_question = _is_asking_about_medical_terms(
+                normalized_text, state.last_document_text
+            )
+
+            logger.info(
+                "Document context check",
+                extra={
+                    "has_document": True,
+                    "question": normalized_text[:100],
+                    "is_medical_question": is_medical_question,
+                    "document_age_seconds": (
+                        time.time() - state.document_uploaded_at
+                        if state.document_uploaded_at
+                        else 0
+                    ),
+                },
+            )
+
+            if is_medical_question:
+                logger.info(" Routing to educational LLM")
+                return explain_medical_terms(
+                    question=normalized_text,
+                    document_text=state.last_document_text,
+                    user_id=user_id,
+                )
+            else:
+                logger.info(" Not a medical question, routing to health advisor")
+        #  DEFAULT: Health advisor for general conversations
+        logger.info("Routing to health advisor (general conversation)")
+        return analyze_health_text(
+            text=normalized_text,
+            user_id=user_id,
+        )
