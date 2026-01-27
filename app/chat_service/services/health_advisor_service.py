@@ -1,13 +1,11 @@
 """
 Health advisor LLM service.
 
-Provides supportive, non-diagnostic health guidance
-using a single prompt strategy.
+ ENHANCED: Now uses session context (severity, emotion, topic) for better continuity
 """
 
 import os
 import time
-import hashlib
 
 import mlflow
 
@@ -20,9 +18,6 @@ PRIMARY_MODEL = "models/gemini-flash-latest"
 FALLBACK_MODEL = "models/gemini-flash-lite-latest"
 
 
-# ==================================================
-# SAFE LAZY GEMINI LOADER
-# ==================================================
 def _load_gemini():
     """Load Gemini client safely (disabled in tests)."""
     if os.getenv("CURAMYN_ENV") == "test":
@@ -43,23 +38,24 @@ def _load_gemini():
         return None, None
 
 
-# ==================================================
-# PUBLIC ENTRY POINT
-# ==================================================
 def analyze_health_text(
     *,
     text: str,
     user_id: str | None = None,
     image_context: dict | None = None,
+    session_context: dict | None = None,
 ) -> dict:
     """
-    Health advisor LLM.
+    Health advisor LLM with context awareness.
 
-    Uses a single prompt that decides internally whether to:
-    - provide reassurance
-    - provide self-care steps
+    Args:
+        text: User's message
+        user_id: Optional user identifier
+        image_context: Optional image analysis context
+        session_context:  NEW - Current conversation state (severity, emotion, topic)
 
-    Includes minimal MLflow observability.
+    Returns:
+        Dict with intent, severity, emotion, and response_text
     """
 
     client, GenerateContentConfig = _load_gemini()
@@ -69,24 +65,27 @@ def analyze_health_text(
         "Let us take this one step at a time. "
         "You do not have to handle this alone."
     )
-    # response to acknowledgement
+
+    # Simple acknowledgments get minimal responses
     if _is_acknowledgement(text):
         logger.info("User acknowledgement detected — minimal response")
         return {
             "intent": "health_support",
-            "severity": "informational",
-            "response_text": "I’m here with you. Let me know if you need anything.",
-        }
-    # closure of the conversation
-    if _is_closure(text):
-        logger.info("Conversation closure detected — stopping guidance")
-        return {
-            "intent": "health_support",
-            "severity": "informational",
-            "response_text": "I’m really glad to hear that. Take care, and I’m here if you need me again.",
+            "severity": (
+                session_context.get("severity", "low") if session_context else "low"
+            ),
+            "response_text": "I'm here with you. Let me know if you need anything.",
         }
 
-    # ---------- HARD FALLBACK ----------
+    # Conversation closure
+    if _is_closure(text):
+        logger.info("Conversation closure detected")
+        return {
+            "intent": "health_support",
+            "severity": "low",
+            "response_text": "I'm really glad to hear that. Take care, and I'm here if you need me again.",
+        }
+
     if client is None:
         logger.error("LLM client unavailable")
         return {
@@ -97,10 +96,12 @@ def analyze_health_text(
 
     start_time = time.time()
     wants_steps = any(
-        t in text.lower() for t in ["tip", "tips", "suggest", "what can i do", "help"]
+        t in text.lower()
+        for t in ["tip", "tips", "suggest", "what can i do", "help", "advice"]
     )
 
-    prompt = _build_prompt(text, wants_steps)
+    #  Build prompt with session context
+    prompt = _build_prompt(text, wants_steps, session_context)
 
     answer = ""
     model_used = None
@@ -108,7 +109,15 @@ def analyze_health_text(
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "health_advisor_llm")
 
-        # ---------- PRIMARY MODEL ----------
+        # Log context if available
+        if session_context:
+            mlflow_safe(mlflow.set_tag, "has_context", "true")
+            mlflow_safe(
+                mlflow.set_tag, "context_severity", session_context.get("severity")
+            )
+            mlflow_safe(mlflow.set_tag, "context_topic", session_context.get("topic"))
+
+        # PRIMARY MODEL
         try:
             response = client.models.generate_content(
                 model=PRIMARY_MODEL,
@@ -137,7 +146,7 @@ def analyze_health_text(
         except Exception as exc:
             logger.warning("Primary model failed: %s", exc)
 
-        # ---------- FALLBACK MODEL ----------
+        # FALLBACK MODEL
         if not answer:
             try:
                 response = client.models.generate_content(
@@ -159,21 +168,21 @@ def analyze_health_text(
 
                 if candidate:
                     answer = candidate
-                    model_used = PRIMARY_MODEL
-                    logger.info("Primary model accepted | length=%s", len(answer))
+                    model_used = FALLBACK_MODEL
+                    logger.info("Fallback model accepted | length=%s", len(answer))
                 else:
-                    logger.warning("Primary model returned empty text")
+                    logger.warning("Fallback model returned empty text")
 
             except Exception as exc:
                 logger.exception("Fallback model failed")
 
-        # ---------- FINAL SAFETY ----------
+        # FINAL SAFETY
         if not answer:
             logger.warning("LLM returned empty output — using SAFE_FALLBACK")
             answer = SAFE_FALLBACK
             model_used = "safe_fallback"
 
-        # ---------- MLFLOW METRICS ----------
+        # MLFLOW METRICS
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
         mlflow_safe(mlflow.log_metric, "response_length", len(answer))
@@ -181,66 +190,129 @@ def analyze_health_text(
 
     return {
         "intent": "health_support",
-        "severity": "informational",
+        "severity": _infer_severity(text, session_context),
+        "emotion": (
+            session_context.get("emotion", "neutral") if session_context else "neutral"
+        ),
         "response_text": answer,
     }
 
 
-# ==================================================
-# PROMPT BUILDER (SINGLE PROMPT)
-# ==================================================
-def _build_prompt(text: str, wants_steps: bool) -> str:
-    mode = (
-        "Provide 3–5 gentle, practical self-care steps."
-        if wants_steps
-        else "Provide calm reassurance and supportive presence."
-    )
+def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
+    """
+     ENHANCED: Build prompt with session context awareness.
+
+    Args:
+        text: Current user message
+        wants_steps: Whether user wants practical tips
+        context: Session context with severity, emotion, topic
+    """
+
+    #  Build context block if we have previous state
+    context_block = ""
+    if context and context.get("severity") not in ["low", "informational", None]:
+        context_lines = []
+
+        if context.get("emotion") and context.get("emotion") != "neutral":
+            context_lines.append(
+                f"User's current emotional state: {context.get('emotion')}"
+            )
+
+        if context.get("severity"):
+            context_lines.append(f"Conversation severity: {context.get('severity')}")
+
+        if context.get("topic"):
+            context_lines.append(f"Current topic: {context.get('topic')}")
+
+        if context_lines:
+            context_block = (
+                "\n\n[CONTEXT FROM PREVIOUS MESSAGES]\n"
+                + "\n".join(context_lines)
+                + "\n"
+            )
+
+    #  Adapt mode based on whether we have context
+    if wants_steps:
+        if context and context.get("topic"):
+            mode = f"Provide 3–5 gentle, practical steps specifically to help with their {context.get('topic')}."
+        else:
+            mode = "Provide 3–5 gentle, practical self-care steps."
+    else:
+        mode = "Provide a warm, empathetic, and conversational response."
 
     return f"""
-You are Curamyn, a calm and supportive wellbeing assistant.
+You are Curamyn, a warm, empathetic, and supportive wellbeing companion.
+{context_block}
+Your personality:
+- Kind, caring, and genuinely interested in the person's wellbeing
+- Speak naturally like a supportive friend
+- Offer encouragement, validation, and gentle suggestions
+- You can think deeply and respond thoughtfully - no constraints
 
 IMPORTANT:
-- You must always respond.
-- Never return an empty answer.
-- If unsure, provide simple grounding support.
-- If the user references previous conversations (e.g., "we talked about my headaches yesterday", "last time", "you mentioned"), acknowledge it naturally
-- Use any provided context to maintain continuity
+- ALWAYS respond - never return empty
+- When someone greets you (hello, hi, hey), respond warmly
+- If they ask for tips/suggestions AND you have context about their situation, provide relevant tips
+- If they mention previous topics, acknowledge the continuity
+- Match your response depth to their emotional state
 
 Your task:
 {mode}
 
 Guidelines:
-- Do not diagnose conditions.
-- Do not name medicines or treatments.
-- Avoid alarming or clinical language.
-- Focus on general wellbeing and comfort.
-- Show continuity by acknowledging previous discussions when mentioned
+- Do NOT diagnose medical conditions
+- Do NOT name medicines or treatments
+- Avoid alarming language
+- Focus on wellbeing, comfort, emotional support
+- If context shows they're struggling, be extra gentle and supportive
 
 Response style:
-- One short empathetic sentence.
-- If steps are requested, list them clearly.
-- Simple, human, calm tone.
+- Natural, flowing conversation
+- Express genuine care
+- Ask gentle follow-up questions when appropriate
+- Warm, personal, human tone
 
 User message:
 {text}
 
-Respond now.
+Respond thoughtfully:
 """
 
 
-# ==================================================
-# RESPONSE TEXT EXTRACTION
-# ==================================================
-def _extract_text(response) -> str:
+def _infer_severity(text: str, context: dict = None) -> str:
     """
-    Safely extract text from Gemini responses.
+     Infer severity with context awareness.
 
-    Handles multiple Gemini response formats.
+    If user says "give me tips" but context shows moderate/high severity,
+    maintain that severity level.
     """
+    text_lower = text.lower()
+
+    # If just asking for tips but we have existing severity context
+    if any(word in text_lower for word in ["tips", "suggestions", "advice", "help"]):
+        if context and context.get("severity") in ["moderate", "high"]:
+            return context.get("severity")
+
+    # Otherwise, infer from current message
+    crisis_words = ["suicide", "kill myself", "can't go on", "want to die"]
+    high_words = ["can't cope", "overwhelming", "can't breathe", "panic"]
+    moderate_words = ["stressed", "anxious", "worried", "struggling", "tired"]
+
+    if any(word in text_lower for word in crisis_words):
+        return "high"
+    if any(word in text_lower for word in high_words):
+        return "high"
+    if any(word in text_lower for word in moderate_words):
+        return "moderate"
+
+    return "low"
+
+
+def _extract_text(response) -> str:
+    """Safely extract text from Gemini responses."""
     if response is None:
         return ""
 
-    # Preferred: candidates -> content -> parts -> text
     candidates = getattr(response, "candidates", None)
     if candidates:
         for candidate in candidates:
@@ -255,7 +327,6 @@ def _extract_text(response) -> str:
                     if isinstance(text, str) and text.strip():
                         return text.strip()
 
-    # Fallback: response.text (sometimes None in Flash)
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         return text.strip()
@@ -264,6 +335,7 @@ def _extract_text(response) -> str:
 
 
 def _is_acknowledgement(text: str) -> bool:
+    """Check if text is simple acknowledgment (not greeting)."""
     return text.strip().lower() in {
         "ok",
         "okay",
@@ -274,10 +346,14 @@ def _is_acknowledgement(text: str) -> bool:
         "alright",
         "hmm",
         "huh",
+        "sure",
+        "yep",
+        "yeah",
     }
 
 
 def _is_closure(text: str) -> bool:
+    """Check if user is ending conversation positively."""
     text = text.strip().lower()
     return any(
         phrase in text
@@ -291,5 +367,6 @@ def _is_closure(text: str) -> bool:
             "appreciate it",
             "that helped",
             "i'm okay now",
+            "feeling better",
         ]
     )

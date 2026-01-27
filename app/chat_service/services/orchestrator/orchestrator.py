@@ -2,11 +2,15 @@
 Main orchestration pipeline for handling user interactions.
 
 This module coordinates:
-- Input routing
-- Safety checks
-- LLM invocation
-- Session state updates
-- Response building
+- Input routing and normalization
+- Consent and safety validation
+- LLM invocation with context enrichment
+- Session state management
+- Response building and delivery
+
+The orchestrator serves as the central hub for the chat service, handling the
+complete lifecycle of user interactions from initial input processing through
+final response generation, with integrated safety checks and memory management.
 """
 
 from typing import Any, Dict
@@ -425,7 +429,27 @@ def _route_llm(
     context: Dict[str, Any],
     user_id: str | None,
 ) -> Dict[str, Any]:
+    """
+    Routes normalized input to the appropriate LLM service based on input type.
 
+    Determines which LLM service to invoke based on input modality and context:
+    - Audio inputs are analyzed with general text analysis
+    - Document OCR extracts medical insights from scanned documents
+    - Images are flagged for non-OCR analysis
+    - Text inputs use smart routing with topic detection and document context management
+
+    Args:
+        input_type: Type of input (text, audio, image).
+        normalized_text: Processed and cleaned input text.
+        image_type: Subtype of image input (e.g., 'document').
+        state: Current session state with memory and context.
+        context: Additional contextual information from the session.
+        user_id: Optional user ID for consent and preference lookup.
+
+    Returns:
+        A dictionary containing LLM analysis results with keys like 'intent',
+        'severity', and service-specific response data.
+    """
     # ==========================================================
     # AUDIO
     # ==========================================================
@@ -436,7 +460,6 @@ def _route_llm(
     # DOCUMENT OCR
     # ==========================================================
     if input_type == "image" and image_type == "document":
-        #  Store document upload timestamp
         state.document_uploaded_at = time.time()
         return analyze_ocr_text(text=normalized_text, user_id=user_id)
 
@@ -454,24 +477,28 @@ def _route_llm(
     # ==========================================================
     if input_type == "text":
 
-        #  CHECK 1: Is user explicitly changing topics?
+        # CHECK 1: Is user explicitly changing topics?
         if _is_topic_change(normalized_text):
             logger.info("Topic change detected - clearing document context")
             state.clear_document_context()
-            # Route to health advisor
+
+            #  Get session context and pass it
+            session_context = state.get_current_context()
+
             return analyze_health_text(
                 text=normalized_text,
                 user_id=user_id,
+                session_context=session_context,
             )
 
-        #  CHECK 2: Is document context too old?
+        # CHECK 2: Is document context too old?
         if state.last_document_text and state.is_document_context_stale(
             max_age_seconds=600
-        ):  # 10 minutes
+        ):
             logger.info("Document context expired (>10 minutes) - clearing")
             state.clear_document_context()
 
-        #  CHECK 3: Educational mode
+        # CHECK 3: Educational mode
         if state.last_document_text:
             is_medical_question = _is_asking_about_medical_terms(
                 normalized_text, state.last_document_text
@@ -492,17 +519,23 @@ def _route_llm(
             )
 
             if is_medical_question:
-                logger.info(" Routing to educational LLM")
+                logger.info("✓ Routing to educational LLM")
                 return explain_medical_terms(
                     question=normalized_text,
                     document_text=state.last_document_text,
                     user_id=user_id,
                 )
             else:
-                logger.info(" Not a medical question, routing to health advisor")
-        #  DEFAULT: Health advisor for general conversations
+                logger.info("✗ Not a medical question, routing to health advisor")
+
+        # DEFAULT: Health advisor for general conversations
         logger.info("Routing to health advisor (general conversation)")
+
+        #  NEW: Get session context and pass it
+        session_context = state.get_current_context()
+
         return analyze_health_text(
             text=normalized_text,
             user_id=user_id,
+            session_context=session_context,
         )

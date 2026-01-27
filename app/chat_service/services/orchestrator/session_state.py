@@ -3,6 +3,8 @@ Session state management.
 
 Maintains short-lived, in-memory conversational context per session.
 NOTE: This is ephemeral and resets on application restart.
+
+✅ ENHANCED: Now tracks current conversation state (intent, severity, emotion, topic)
 """
 
 import time
@@ -25,6 +27,8 @@ class SessionState:
     In-memory session state container.
 
     Stores conversational signals and recent analysis context.
+
+     NEW: Tracks current state for better context continuity.
     """
 
     def __init__(self, session_id: str):
@@ -37,6 +41,13 @@ class SessionState:
         self.emotions: List[str] = []
         self.sentiments: List[str] = []
         self.started_at = datetime.now(timezone.utc)
+
+        #  NEW: Current conversation state (for context continuity)
+        self.current_intent: str = "casual_chat"
+        self.current_severity: str = "low"
+        self.current_emotion: str = "neutral"
+        self.current_sentiment: str = "neutral"
+        self.current_topic: Optional[str] = None  # e.g., "work stress", "sleep issues"
 
         # Image-related context
         self.last_image_analysis: Optional[dict] = None
@@ -101,6 +112,8 @@ class SessionState:
     def update_from_llm(self, llm_result: dict) -> None:
         """
         Update session signals based on LLM output.
+
+         ENHANCED: Now updates current state for better context continuity.
         """
         if not isinstance(llm_result, dict):
             logger.warning(
@@ -112,8 +125,9 @@ class SessionState:
         intent = llm_result.get("intent") or "health_support"
         if intent:
             self.intents.append(intent)
+            self.current_intent = intent
 
-            #  MARK HEALTH CONTEXT AS ACTIVE (CRITICAL)
+            # MARK HEALTH CONTEXT AS ACTIVE (CRITICAL)
             if intent in {
                 "health_support",
                 "self_care",
@@ -121,19 +135,61 @@ class SessionState:
                 "image_analysis",
                 "document_understanding",
             }:
-                self.has_health_context = True  #
+                self.has_health_context = True
 
         severity = llm_result.get("severity")
         if severity:
             self.severities.append(severity)
+            self.current_severity = severity
 
         emotion = llm_result.get("emotion")
         if emotion:
             self.emotions.append(emotion)
+            self.current_emotion = emotion
 
         sentiment = llm_result.get("sentiment")
         if sentiment:
             self.sentiments.append(sentiment)
+            self.current_sentiment = sentiment
+
+        #  NEW: Extract topic from user's last message if severity is moderate/high
+        if severity in ["moderate", "high"] and self.last_messages:
+            last_user_msg = None
+            for msg in reversed(self.last_messages):
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content", "").lower()
+                    break
+
+            if last_user_msg:
+                # Simple topic extraction from keywords
+                if "stress" in last_user_msg or "stressed" in last_user_msg:
+                    self.current_topic = "stress"
+                elif "sleep" in last_user_msg or "insomnia" in last_user_msg:
+                    self.current_topic = "sleep issues"
+                elif "anxious" in last_user_msg or "anxiety" in last_user_msg:
+                    self.current_topic = "anxiety"
+                elif "work" in last_user_msg:
+                    self.current_topic = "work stress"
+                elif "tired" in last_user_msg or "fatigue" in last_user_msg:
+                    self.current_topic = "fatigue"
+                elif "sad" in last_user_msg or "depressed" in last_user_msg:
+                    self.current_topic = "low mood"
+
+    def get_current_context(self) -> dict:
+        """
+         NEW: Get current conversation context for prompt building.
+
+        Returns:
+            Dict with current intent, severity, emotion, and topic
+        """
+        return {
+            "intent": self.current_intent,
+            "severity": self.current_severity,
+            "emotion": self.current_emotion,
+            "sentiment": self.current_sentiment,
+            "topic": self.current_topic,
+            "has_health_context": self.has_health_context,
+        }
 
     def update_image_analysis(self, image_analysis: dict) -> None:
         """Store latest medical image analysis context."""
