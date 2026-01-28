@@ -1,7 +1,8 @@
 """
 Health advisor LLM service.
 
- ENHANCED: Now uses session context (severity, emotion, topic) for better continuity
+ENHANCED: Now uses session context (severity, emotion, topic) for better continuity
+and intelligently references past conversations when relevant.
 """
 
 import os
@@ -49,10 +50,10 @@ def analyze_health_text(
     Health advisor LLM with context awareness.
 
     Args:
-        text: User's message
+        text: User's message (may include injected past conversation context)
         user_id: Optional user identifier
         image_context: Optional image analysis context
-        session_context:  NEW - Current conversation state (severity, emotion, topic)
+        session_context: NEW - Current conversation state (severity, emotion, topic)
 
     Returns:
         Dict with intent, severity, emotion, and response_text
@@ -100,7 +101,7 @@ def analyze_health_text(
         for t in ["tip", "tips", "suggest", "what can i do", "help", "advice"]
     )
 
-    #  Build prompt with session context
+    # Build prompt with session context
     prompt = _build_prompt(text, wants_steps, session_context)
 
     answer = ""
@@ -200,15 +201,15 @@ def analyze_health_text(
 
 def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
     """
-     ENHANCED: Build prompt with session context awareness.
+    ENHANCED: Build prompt with session context awareness.
 
     Args:
-        text: Current user message
+        text: Current user message (may already include past conversation context from ContextAgent)
         wants_steps: Whether user wants practical tips
         context: Session context with severity, emotion, topic
     """
 
-    #  Build context block if we have previous state
+    # Build context block if we have previous state
     context_block = ""
     if context and context.get("severity") not in ["low", "informational", None]:
         context_lines = []
@@ -224,14 +225,20 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
         if context.get("topic"):
             context_lines.append(f"Current topic: {context.get('topic')}")
 
-        if context_lines:
-            context_block = (
-                "\n\n[CONTEXT FROM PREVIOUS MESSAGES]\n"
-                + "\n".join(context_lines)
-                + "\n"
+        # NEW: Flag if this relates to past conversations
+        if context.get("has_past_context"):
+            context_lines.append(
+                "⚠️ IMPORTANT: User has discussed similar concerns before. "
+                "See [RELEVANT PAST CONVERSATIONS] section in the user message. "
+                "Acknowledge continuity naturally if appropriate."
             )
 
-    #  Adapt mode based on whether we have context
+        if context_lines:
+            context_block = (
+                "\n\n[CONTEXT FROM CURRENT SESSION]\n" + "\n".join(context_lines) + "\n"
+            )
+
+    # Adapt mode based on whether we have context
     if wants_steps:
         if context and context.get("topic"):
             mode = f"Provide 3–5 gentle, practical steps specifically to help with their {context.get('topic')}."
@@ -243,45 +250,67 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
     return f"""
 You are Curamyn, a warm, empathetic, and supportive wellbeing companion.
 {context_block}
+
 Your personality:
 - Kind, caring, and genuinely interested in the person's wellbeing
 - Speak naturally like a supportive friend
 - Offer encouragement, validation, and gentle suggestions
 - You can think deeply and respond thoughtfully - no constraints
 
-IMPORTANT:
-- ALWAYS respond - never return empty
-- When someone greets you (hello, hi, hey), respond warmly
-- If they ask for tips/suggestions AND you have context about their situation, provide relevant tips
-- If they mention previous topics, acknowledge the continuity
-- Match your response depth to their emotional state
+CRITICAL INSTRUCTIONS FOR PAST CONVERSATION REFERENCES:
 
-Your task:
+✅ **IF YOU SEE "📋 RELEVANT PAST CONVERSATIONS:" in the user's message:**
+   1. Acknowledge naturally and warmly:
+      - "I remember we talked about your [specific topic] before..."
+      - "You mentioned [specific detail from past conversation]..."
+   
+   2. Show continuity with specific questions:
+      - "Is [the issue] still bothering you?"
+      - "How long has this been going on since we last spoke?"
+      - "Has the situation changed at all?"
+   
+   3. Reference past context if mentioned:
+      - Duration: "You said it had been going on for [X days/weeks]..."
+      - Actions: "You mentioned trying [specific action]. Did that help?"
+      - Triggers: "Last time you said [trigger] made it worse..."
+   
+   4. Be empathetic about the continuity:
+      - "I'm glad you're comfortable sharing this with me again."
+      - "Thank you for trusting me with this ongoing concern."
+      - "I can see this has been persistent for you."
+   
+   5. Ask CALM follow-up questions (don't overwhelm):
+      - "How are you feeling about it now?"
+      - "Have you been able to try any of the suggestions we discussed?"
+      - "What would help you most right now?"
+
+⚠️ **IMPORTANT RULES:**
+- Do NOT diagnose medical conditions
+- Do NOT name specific medicines or treatments
+- Do NOT say "consult a doctor" unless severity is HIGH
+- If you see past medical actions (medications, doctor visits), acknowledge WITHOUT commenting on medical appropriateness
+- Focus on emotional support and wellness guidance
+
+📝 **Response Guidelines:**
+- Natural, flowing conversation (not bullet points unless user asks for tips)
+- Express genuine care and empathy
+- Ask 1-2 gentle follow-up questions maximum
+- Warm, personal, human tone
+- Keep responses concise but thoughtful (3-5 sentences unless giving tips)
+
+Your current task:
 {mode}
 
-Guidelines:
-- Do NOT diagnose medical conditions
-- Do NOT name medicines or treatments
-- Avoid alarming language
-- Focus on wellbeing, comfort, emotional support
-- If context shows they're struggling, be extra gentle and supportive
-
-Response style:
-- Natural, flowing conversation
-- Express genuine care
-- Ask gentle follow-up questions when appropriate
-- Warm, personal, human tone
-
-User message:
+Now respond to the user's message:
 {text}
 
-Respond thoughtfully:
-"""
+Remember: If you see past conversation context above, acknowledge it naturally and show continuity of care.
+""".strip()
 
 
 def _infer_severity(text: str, context: dict = None) -> str:
     """
-     Infer severity with context awareness.
+    Infer severity with context awareness.
 
     If user says "give me tips" but context shows moderate/high severity,
     maintain that severity level.

@@ -1,8 +1,10 @@
 """
 Session summary generation service.
 
-Creates a privacy-safe, high-level session summary.
+Creates a privacy-safe, high-level session summary with detailed health context.
 This service is ONLY called at session end.
+
+ENHANCED: Now captures specific health topics and contextual details.
 """
 
 from typing import List, Dict
@@ -66,7 +68,7 @@ def _generate_summary_llm(*, prompt: str) -> Dict:
             contents=prompt,
             config=GenerateContentConfig(
                 temperature=0.0,  # deterministic JSON
-                max_output_tokens=800,  # prevent truncation
+                max_output_tokens=1200,  # Increased for detailed summaries
             ),
         )
 
@@ -90,40 +92,128 @@ def generate_session_summary(messages: List[str]) -> Dict:
     """
     Generate a privacy-safe session summary from conversation messages.
     Called ONLY at logout.
+
+    ENHANCED: Now captures specific health topics and contextual details.
     """
 
-    logger.info("Generating session summary")
+    logger.info("Generating enhanced session summary")
 
     if not messages:
         return _empty_summary()
 
     transcript = "\n".join(m.strip() for m in messages if m.strip())
-    transcript = transcript[:6000]  # hard safety cap
+    transcript = transcript[:8000]  # Increased limit for better context
 
     prompt = f"""
-You are a SESSION SUMMARY ENGINE.
+You are a SESSION SUMMARY ENGINE for a healthcare AI assistant.
 
 YOU MUST RETURN ONLY VALID JSON.
 NO prose. NO markdown. NO explanations.
 
-RULES:
-- Health-related only
+CRITICAL RULES:
+- Health-related content only
 - Do NOT give advice or diagnosis
-- No personal identifiers
-- Use concise neutral language
-- You MUST close all quotes and braces
+- No personal identifiers (names, addresses, phone numbers)
+- Use concise, neutral, clinical language
+- CAPTURE SPECIFIC HEALTH CONCERNS mentioned (e.g., "headache", "anxiety", "insomnia")
+- INCLUDE CONTEXT DETAILS like duration, triggers, severity, actions taken
+- You MUST close all quotes and braces correctly
 
-Conversation:
+Conversation Transcript:
 {transcript}
 
-Return JSON EXACTLY like this:
+Return JSON EXACTLY like this structure:
+
 {{
-  "summary_text": "2 to 3 sentence neutral summary",
+  "summary_text": "2-3 sentence summary mentioning SPECIFIC health concerns and key context",
   "primary_intent": "health_support | self_care | general_health",
-  "primary_emotion": "anxious | stressed | tired | worried | calm",
+  "primary_emotion": "anxious | stressed | tired | worried | calm | sad | frustrated",
   "overall_sentiment": "negative | neutral | positive",
-  "severity_peak": "low | moderate | high"
+  "severity_peak": "low | moderate | high",
+  "health_topics": ["topic1", "topic2", "topic3"],
+  "context_details": {{
+    "duration": "how long the issue has persisted (e.g., '3 days', '2 weeks', 'ongoing')",
+    "triggers": "what causes or worsens the issue (if mentioned)",
+    "severity_notes": "how severe the user describes it",
+    "actions_taken": "medications, remedies, doctor visits mentioned (or 'none mentioned')"
+  }}
 }}
+
+EXAMPLES OF GOOD SUMMARIES:
+
+Example 1 - Headache:
+{{
+  "summary_text": "User discussed persistent headaches occurring for 3 days, primarily triggered by prolonged screen time and work stress. Expressed concern about impact on work productivity.",
+  "primary_intent": "health_support",
+  "primary_emotion": "worried",
+  "overall_sentiment": "negative",
+  "severity_peak": "moderate",
+  "health_topics": ["headache", "work stress", "eye strain", "productivity concerns"],
+  "context_details": {{
+    "duration": "3 days",
+    "triggers": "screen time, work deadlines, bright lights",
+    "severity_notes": "moderate pain, affecting focus and work",
+    "actions_taken": "tried taking breaks, reduced screen brightness"
+  }}
+}}
+
+Example 2 - Anxiety:
+{{
+  "summary_text": "User shared ongoing anxiety about upcoming work presentation, experiencing difficulty sleeping for 5 nights. Mentioned trying breathing exercises with limited success.",
+  "primary_intent": "health_support",
+  "primary_emotion": "anxious",
+  "overall_sentiment": "negative",
+  "severity_peak": "moderate",
+  "health_topics": ["anxiety", "insomnia", "work presentations", "public speaking fear"],
+  "context_details": {{
+    "duration": "5 nights of poor sleep",
+    "triggers": "work presentation, public speaking, fear of judgment",
+    "severity_notes": "moderate anxiety, sleep disruption, racing thoughts",
+    "actions_taken": "tried breathing exercises, avoided caffeine"
+  }}
+}}
+
+Example 3 - Multiple Topics:
+{{
+  "summary_text": "User reported feeling tired and stressed from work, with occasional stomach discomfort. Mentioned irregular sleep schedule affecting overall wellbeing.",
+  "primary_intent": "health_support",
+  "primary_emotion": "stressed",
+  "overall_sentiment": "negative",
+  "severity_peak": "low",
+  "health_topics": ["fatigue", "work stress", "stomach issues", "sleep disruption"],
+  "context_details": {{
+    "duration": "past 2 weeks",
+    "triggers": "work deadlines, irregular meals, poor sleep schedule",
+    "severity_notes": "mild to moderate, manageable but persistent",
+    "actions_taken": "none mentioned"
+  }}
+}}
+
+Example 4 - Positive/Resolution:
+{{
+  "summary_text": "User followed up on previous anxiety concerns, reported feeling better after implementing suggested relaxation techniques. Sleep quality has improved.",
+  "primary_intent": "self_care",
+  "primary_emotion": "calm",
+  "overall_sentiment": "positive",
+  "severity_peak": "low",
+  "health_topics": ["anxiety follow-up", "sleep improvement", "relaxation techniques"],
+  "context_details": {{
+    "duration": "improvement over past week",
+    "triggers": "none currently",
+    "severity_notes": "resolved or significantly improved",
+    "actions_taken": "practicing relaxation techniques, maintaining sleep schedule"
+  }}
+}}
+
+IMPORTANT GUIDELINES:
+1. Be SPECIFIC with health topics - not just "health concern" but "headache", "anxiety", etc.
+2. Capture duration details - "3 days", "2 weeks", "ongoing for months"
+3. Note triggers if mentioned - "screen time", "work stress", "certain foods"
+4. Record actions taken - "tried medication", "saw doctor", "using home remedies"
+5. If multiple topics discussed, list all of them
+6. If no specific duration/triggers mentioned, leave those fields as "not mentioned"
+
+Now generate the summary:
 """
 
     try:
@@ -135,8 +225,9 @@ Return JSON EXACTLY like this:
     if not parsed:
         return _base_summary_from_transcript(transcript)
 
+    # Validate and structure the response
     return {
-        "summary_text": parsed.get("summary_text"),
+        "summary_text": parsed.get("summary_text", ""),
         "primary_intent": _safe_enum(
             parsed.get("primary_intent"),
             {"health_support", "self_care", "general_health"},
@@ -152,6 +243,8 @@ Return JSON EXACTLY like this:
             {"low", "moderate", "high"},
             default="low",
         ),
+        "health_topics": parsed.get("health_topics", []),
+        "context_details": parsed.get("context_details", {}),
     }
 
 
@@ -210,14 +303,36 @@ def _empty_summary() -> Dict:
         "primary_emotion": None,
         "overall_sentiment": None,
         "severity_peak": None,
+        "health_topics": [],
+        "context_details": {},
     }
 
 
 def _base_summary_from_transcript(transcript: str) -> Dict:
+    """
+    Fallback summary when LLM fails.
+    Uses keyword matching to extract basic health topics.
+    """
     text = transcript.lower()
 
+    # Extract basic health topics from text
+    health_keywords = {
+        "headache": ["headache", "head pain", "migraine"],
+        "anxiety": ["anxiety", "anxious", "worried", "nervous", "panic"],
+        "insomnia": ["insomnia", "can't sleep", "trouble sleeping"],
+        "fatigue": ["tired", "fatigue", "exhausted"],
+        "depression": ["sad", "depressed", "depression", "down"],
+        "stomach": ["stomach", "nausea", "digestive"],
+        "pain": ["pain", "hurt", "ache"],
+    }
+
+    detected_topics = []
+    for topic, keywords in health_keywords.items():
+        if any(kw in text for kw in keywords):
+            detected_topics.append(topic)
+
     return {
-        "summary_text": "The user discussed health-related thoughts and personal well-being.",
+        "summary_text": "The user discussed health-related concerns and personal wellbeing.",
         "primary_intent": (
             "self_care"
             if any(w in text for w in ["diet", "sleep", "yoga", "exercise"])
@@ -229,15 +344,24 @@ def _base_summary_from_transcript(transcript: str) -> Dict:
             else (
                 "stressed"
                 if any(w in text for w in ["stress", "tired", "anxious"])
-                else None
+                else "neutral"
             )
         ),
         "overall_sentiment": (
             "positive"
-            if any(w in text for w in ["happy", "motivated"])
+            if any(w in text for w in ["happy", "motivated", "better"])
             else (
-                "negative" if any(w in text for w in ["stress", "tired"]) else "neutral"
+                "negative"
+                if any(w in text for w in ["stress", "tired", "pain"])
+                else "neutral"
             )
         ),
         "severity_peak": "low",
+        "health_topics": detected_topics if detected_topics else ["general wellness"],
+        "context_details": {
+            "duration": "not mentioned",
+            "triggers": "not mentioned",
+            "severity_notes": "not specified",
+            "actions_taken": "none mentioned",
+        },
     }
