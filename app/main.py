@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("TTS cache failed", extra={"error": str(e)})
 
-    asyncio.create_task(asyncio.to_thread(warm_tts))
+    asyncio.create_task(warm_tts())
 
     yield
 

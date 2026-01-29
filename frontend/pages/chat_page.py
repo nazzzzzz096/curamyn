@@ -808,8 +808,7 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
     try:
         logger.info("User selected a file")
 
-        #  async read
-        file_bytes = await e.read()
+        file_bytes = e.file.read()
 
         if not file_bytes:
             with CHAT_CONTAINER:
@@ -821,15 +820,11 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
 
         with CHAT_CONTAINER:
             with ui.row().classes("w-full justify-end"):
-
-                #  IMAGE PREVIEW
                 if mime.startswith("image/"):
                     encoded = base64.b64encode(file_bytes).decode()
                     ui.image(f"data:{mime};base64,{encoded}").classes(
                         "max-w-xs rounded-lg border border-gray-600"
                     )
-
-                # DOCUMENT PREVIEW
                 else:
                     ui.card().classes(
                         "px-4 py-2 bg-slate-700 rounded-xl text-white max-w-xs"
@@ -838,7 +833,7 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
         _scroll_to_bottom()
         logger.info(f"File loaded: {len(file_bytes)} bytes")
 
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to handle file upload")
         with CHAT_CONTAINER:
             ui.notify("Failed to load file", type="negative")
@@ -1119,27 +1114,24 @@ def _render_message(message: dict, container) -> None:
 
         # ================= AUDIO =================
         if msg_type == "audio":
-            mime = message.get("mime_type") or "audio/webm"  # SAFE DEFAULT
             audio_base64 = message.get("audio_data")
-
             if not audio_base64:
                 return
 
-            data_url = f"data:{mime};base64,{audio_base64}"
+            data_url = f"data:audio/wav;base64,{audio_base64}"
 
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
                 ui.html(
                     f"""
-                    <audio controls preload="auto">
-                        <source src="{data_url}" type="{mime}">
-                        Your browser does not support audio playback.
-                    </audio>
-                    """,
+            <audio controls>
+                <source src="{data_url}" type="audio/wav">
+                Your browser does not support audio playback.
+            </audio>
+            """,
                     sanitize=False,
                 )
-
             return
 
         # ================= IMAGE =================
