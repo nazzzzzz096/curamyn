@@ -131,20 +131,17 @@ def show_chat_page() -> None:
     ui.dark_mode().enable()
 
     # Add CSS to prevent accidental menu opening
-    ui.add_head_html(
+    ui.run_javascript(
         """
-    <style>
-        /* Disable hover/touch activation for menu */
-        .q-menu {
-            pointer-events: auto !important;
-        }
-        
-        /* Prevent accidental activation */
-        .q-btn--round:hover .q-menu {
-            display: none !important;
-        }
-    </style>
-    """
+document.addEventListener('click', () => {
+    if (!window._audioUnlocked) {
+        const a = new Audio();
+        a.muted = true;
+        a.play().catch(() => {});
+        window._audioUnlocked = true;
+    }
+}, { once: true });
+"""
     )
 
     # ================= DELETE MEMORY DIALOG =================
@@ -700,7 +697,7 @@ async def send_voice(audio_array: list[int]) -> dict:
                         "sent": False,
                         "type": "audio",
                         "audio_data": result["audio_base64"],
-                        "mime_type": "audio/wav",
+                        "mime_type": result.get("audio_mime_type", "audio/webm"),
                     }
                     _render_message(audio_msg, CHAT_CONTAINER)
                     _scroll_to_bottom()
@@ -812,53 +809,45 @@ def _set_document_mode() -> None:
 # FILE UPLOAD
 # =================================================
 async def _on_file_selected(e: events.UploadEventArguments) -> None:
-    """Proper async file reading."""
     global PENDING_FILE_BYTES
 
     try:
         logger.info("User selected a file")
 
-        #  Await the async read() method
+        #  async read
         file_bytes = await e.content.read()
 
         if not file_bytes:
-            if CHAT_CONTAINER:
-                with CHAT_CONTAINER:
-                    ui.notify("Empty file", type="warning")
-                    return
+            with CHAT_CONTAINER:
+                ui.notify("Empty file", type="warning")
+            return
 
         PENDING_FILE_BYTES = file_bytes
+        mime = e.type or "application/octet-stream"
 
-        # Show preview
-        encoded = base64.b64encode(file_bytes).decode()
+        with CHAT_CONTAINER:
+            with ui.row().classes("w-full justify-end"):
 
-        msg = {
-            "author": "You",
-            "sent": True,
-            "type": "image",
-            "image_data": encoded,
-            "mime_type": e.type or "image/png",
-        }
-
-        state.messages.append(msg)
-
-        if CHAT_CONTAINER:
-            with CHAT_CONTAINER:
-                with ui.row().classes("w-full justify-end"):
-                    ui.image(f"data:{e.type};base64,{encoded}").classes(
+                #  IMAGE PREVIEW
+                if mime.startswith("image/"):
+                    encoded = base64.b64encode(file_bytes).decode()
+                    ui.image(f"data:{mime};base64,{encoded}").classes(
                         "max-w-xs rounded-lg border border-gray-600"
                     )
 
-        _store_message_js(msg)
-        _scroll_to_bottom()
+                # DOCUMENT PREVIEW
+                else:
+                    ui.card().classes(
+                        "px-4 py-2 bg-slate-700 rounded-xl text-white max-w-xs"
+                    ).props("flat").children.append(ui.label(f"📄 {e.name}"))
 
+        _scroll_to_bottom()
         logger.info(f"File loaded: {len(file_bytes)} bytes")
 
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to handle file upload")
-        if CHAT_CONTAINER:
-            with CHAT_CONTAINER:
-                ui.notify("Failed to load file", type="negative")
+        with CHAT_CONTAINER:
+            ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
 
 
@@ -1136,31 +1125,34 @@ def _render_message(message: dict, container) -> None:
 
         # ================= AUDIO =================
         if msg_type == "audio":
-            data_url = (
-                f"data:{message.get('mime_type')};base64,"
-                f"{message.get('audio_data')}"
-            )
-            audio_id = f"audio-{message.get('timestamp', '')}"
+            mime = message.get("mime_type") or "audio/webm"  # SAFE DEFAULT
+            audio_base64 = message.get("audio_data")
+
+            if not audio_base64:
+                return
+
+            data_url = f"data:{mime};base64,{audio_base64}"
+
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
                 ui.html(
                     f"""
-                    <audio id="{audio_id}" controls preload="auto">
-                    <source src="{data_url}" type="{message.get('mime_type')}">
+                    <audio controls preload="auto">
+                        <source src="{data_url}" type="{mime}">
+                        Your browser does not support audio playback.
                     </audio>
-
                     """,
                     sanitize=False,
                 )
+
                 ui.run_javascript(
                     """
-                  setTimeout(() => {
-                  document.querySelectorAll('audio').forEach(a => a.load());
-                   }, 50);
-                 """
+                    setTimeout(() => {
+                        document.querySelectorAll('audio').forEach(a => a.load());
+                    }, 100);
+                    """
                 )
-
             return
 
         # ================= IMAGE =================
