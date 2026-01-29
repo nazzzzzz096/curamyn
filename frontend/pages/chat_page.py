@@ -573,11 +573,12 @@ def _start_recording() -> None:
 
     ui.run_javascript(
         """
-        // Unlock audio playback using user gesture (required by browsers)
-        if (!window._unlockedAudio) {
-            window._unlockedAudio = new Audio();
-            window._unlockedAudio.muted = true;
-            window._unlockedAudio.play().catch(() => {});
+        //  Unlock audio playback ONCE
+        if (!window._audioUnlocked) {
+            const a = new Audio();
+            a.muted = true;
+            a.play().catch(() => {});
+            window._audioUnlocked = true;
         }
 
         window._audioChunks = [];
@@ -594,17 +595,9 @@ def _start_recording() -> None:
             })
             .catch(err => {
                 console.error('Microphone access denied', err);
-                fetch('/_nicegui_internal/notify_error', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        message: 'Microphone access denied.'
-                    })
-                });
             });
         """
     )
-
 
 async def _stop_recording() -> None:
     """
@@ -815,7 +808,7 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
         logger.info("User selected a file")
 
         #  async read
-        file_bytes = await e.content.read()
+        file_bytes = await e.read()
 
         if not file_bytes:
             with CHAT_CONTAINER:
@@ -1146,13 +1139,6 @@ def _render_message(message: dict, container) -> None:
                     sanitize=False,
                 )
 
-                ui.run_javascript(
-                    """
-                    setTimeout(() => {
-                        document.querySelectorAll('audio').forEach(a => a.load());
-                    }, 100);
-                    """
-                )
             return
 
         # ================= IMAGE =================
