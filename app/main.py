@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
 
+
 from app.chat_service.api.ai_routes import router as ai_router
 from app.chat_service.api.chat_history_router import router as chat_history_router
 from app.chat_service.api.memory_routes import router as memory_router

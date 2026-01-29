@@ -78,7 +78,7 @@ def signup(request: Request, payload: UserSignup) -> UserResponse:
         ) from exc
 
 
-@router.post("/auth/login")
+@router.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, payload: UserLogin) -> TokenResponse:
     """Authenticate user and issue JWT token."""
