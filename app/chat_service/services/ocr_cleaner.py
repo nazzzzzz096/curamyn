@@ -7,6 +7,7 @@ while preserving medical content.
 
 import re
 from app.chat_service.utils.logger import get_logger
+from app.common.pii_detector import redact_pii
 
 logger = get_logger(__name__)
 
@@ -109,8 +110,10 @@ def clean_ocr_text(text: str) -> str:
 
     cleaned_text = "\n".join(cleaned_lines)
 
+    cleaned_text = redact_pii(cleaned_text, replacement="[REDACTED]")
+
     logger.info(
-        "OCR cleaning completed",
+        "OCR cleaning completed with PII redaction",
         extra={
             "original_lines": len(text.splitlines()),
             "cleaned_lines": len(cleaned_lines),

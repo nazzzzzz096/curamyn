@@ -47,21 +47,7 @@ def explain_medical_terms(
     user_id: str | None = None,
 ) -> dict:
     """
-    Explain medical terms from the user's uploaded document.
-
-    STRICT RULES:
-    - Answer questions about terms, values, or ranges in the document
-    - Do NOT diagnose
-    - Do NOT say if results are normal/abnormal
-    - Educational purpose only
-
-    Args:
-        question: User's question about terms
-        document_text: The extracted document text
-        user_id: Optional user identifier
-
-    Returns:
-        dict with intent, severity, and response_text
+    Explain medical terms OR summarize document from user's uploaded file.
     """
     logger.info("Educational mode activated")
 
@@ -78,12 +64,59 @@ def explain_medical_terms(
 
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "educational_llm")
-        mlflow_safe(mlflow.set_tag, "mode", "term_explanation")
 
-        if user_id:
-            mlflow_safe(mlflow.set_tag, "user_id", user_id)
+        # ✅ NEW: Detect if user wants full summary vs. term explanation
+        wants_summary = any(
+            phrase in question.lower()
+            for phrase in [
+                "what was in",
+                "summarize",
+                "summary of",
+                "what did",
+                "what does it say",
+                "overview",
+                "main findings",
+                "key results",
+            ]
+        )
 
-        prompt = f"""You are a medical terminology educator helping someone understand their lab report.
+        if wants_summary:
+            mlflow_safe(mlflow.set_tag, "mode", "document_summary")
+            prompt = f"""You are a medical document summarizer.
+
+USER'S DOCUMENT:
+{document_text}
+
+USER'S QUESTION:
+{question}
+
+TASK:
+Provide a clear, structured summary of the document's main content.
+
+RULES:
+1. List the report type (e.g., "Complete Blood Count", "Haematology Report")
+2. Highlight key test parameters and their values
+3. Note any remarks or observations mentioned
+4. DO NOT diagnose or interpret if values are normal/abnormal
+5. DO NOT provide medical advice
+6. Present information factually and clearly
+
+Format your response as:
+
+Report Type: [name]
+
+Key Findings:
+- [Parameter 1]: [Value] (Reference: [range])
+- [Parameter 2]: [Value] (Reference: [range])
+...
+
+Remarks: [if any]
+
+Provide the summary now:"""
+
+        else:
+            mlflow_safe(mlflow.set_tag, "mode", "term_explanation")
+            prompt = f"""You are a medical terminology educator helping someone understand their lab report.
 
 USER'S DOCUMENT (for reference):
 {document_text}
@@ -95,32 +128,15 @@ STRICT RULES:
 1. Answer ANY question related to the document content
 2. This includes:
    - What medical terms mean (e.g., "What is hemoglobin?")
-   - What normal/reference ranges mean (e.g., "What is the normal range for hemoglobin?")
+   - What normal/reference ranges mean
    - What units mean (e.g., "What does g/dL mean?")
-   - What test categories mean (e.g., "What is a CBC?")
-   - General education about tests in the document
+   - What test categories mean
 
 3. Do NOT:
    - Diagnose conditions
-   - Interpret if the USER'S specific values are normal/abnormal
+   - Interpret if USER'S specific values are normal/abnormal
    - Provide medical advice
    - Recommend treatments
-
-4. Acceptable to say:
-   ✅ "Hemoglobin is a protein in red blood cells that carries oxygen. The normal range for adults is typically 12-16 g/dL for women and 14-18 g/dL for men."
-   ✅ "TSH stands for Thyroid Stimulating Hormone. Normal ranges are usually 0.4-4.0 mIU/L."
-   ✅ "WBC count measures white blood cells which fight infection."
-
-5. NOT acceptable:
-   ❌ "Your hemoglobin of 10.8 is low, you might have anemia"
-   ❌ "This result is abnormal"
-   ❌ "You should take iron supplements"
-
-If the question is about a term NOT in the document, say:
-"That term doesn't appear in your uploaded document. I can only explain terms from your report."
-
-If the user asks for diagnosis or interpretation of THEIR values, say:
-"I can explain what the term means and what normal ranges typically are, but I cannot interpret your specific results or diagnose conditions. Please discuss your results with your healthcare provider."
 
 Provide a clear, educational explanation in 2-4 sentences."""
 
@@ -131,7 +147,9 @@ Provide a clear, educational explanation in 2-4 sentences."""
                 config=(
                     GenerateContentConfig(
                         temperature=0.3,
-                        max_output_tokens=500,
+                        max_output_tokens=(
+                            800 if wants_summary else 500
+                        ),  # More tokens for summaries
                     )
                     if GenerateContentConfig
                     else None
@@ -142,7 +160,7 @@ Provide a clear, educational explanation in 2-4 sentences."""
 
         except Exception:
             logger.exception("Educational LLM call failed")
-            output = "I'm having trouble explaining that right now. Please try again."
+            output = "I'm having trouble processing that right now. Please try again."
 
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)

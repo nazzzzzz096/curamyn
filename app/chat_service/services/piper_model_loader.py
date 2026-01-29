@@ -17,8 +17,8 @@ BUCKET_NAME = settings.S3_BUCKET_NAME
 S3_PREFIX = "models/voice"
 
 FILES = [
-    "en_US-amy-low.onnx",
-    "en_US-amy-low.onnx.json",
+    "en_US-lessac-medium.onnx",
+    "en_US-lessac-medium.onnx.json",
 ]
 
 LOCAL_MODEL_DIR = Path("/app/models")

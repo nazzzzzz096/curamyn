@@ -26,6 +26,12 @@ from app.chat_service.config import settings
 from app.chat_service.utils.logger import get_logger
 from app.core.rate_limit import limiter
 from app.core.security import verify_access_token
+from app.core.audit_middleware import AuditMiddleware
+from app.chat_service.services.tts_streamer import init_tts_cache
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
 logger = get_logger(__name__)
 
@@ -61,6 +67,29 @@ async def lifespan(app: FastAPI):
     yield
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup/shutdown events.
+
+    This runs before the application starts and after it shuts down.
+    """
+    # ✅ STARTUP
+    print("🚀 Starting application...")
+
+    # Pre-generate TTS cache
+    from app.chat_service.services.tts_streamer import init_tts_cache
+
+    init_tts_cache()
+
+    print("✅ Application startup complete")
+
+    yield  # Application runs here
+
+    # ✅ SHUTDOWN
+    print("🔄 Application shutting down...")
+
+
 # =========================================================
 # App Init
 # =========================================================
@@ -69,6 +98,7 @@ app = FastAPI(
     title="Curamyn",
     version="1.1.0",
 )
+
 
 # =========================================================
 # Rate Limiting (MUST be before CORS)
@@ -116,6 +146,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(AuditMiddleware)
 
 
 # =========================================================
@@ -166,3 +198,18 @@ logger.info(
 @app.get("/health", tags=["health"])
 def health_check() -> dict:
     return {"status": "ok"}
+
+
+# Initialize Sentry
+if settings.ENV == "prod":
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),  # Get from sentry.io
+        integrations=[
+            FastApiIntegration(),
+            StarletteIntegration(),
+        ],
+        traces_sample_rate=0.1,  # 10% of transactions for performance monitoring
+        profiles_sample_rate=0.1,  # 10% for profiling
+        environment=settings.ENV,
+    )
+    logger.info("Sentry initialized for error tracking")

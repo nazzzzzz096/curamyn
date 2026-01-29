@@ -1,10 +1,5 @@
 """
-Session state management.
-
-Maintains short-lived, in-memory conversational context per session.
-NOTE: This is ephemeral and resets on application restart.
-
-✅ ENHANCED: Now tracks current conversation state (intent, severity, emotion, topic)
+Session state management with MongoDB persistence.
 """
 
 import time
@@ -12,11 +7,16 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from app.chat_service.utils.logger import get_logger
+from app.chat_service.repositories.session_state_repository import (
+    save_session_state,
+    load_session_state,
+    delete_session_state,
+)
 
 logger = get_logger(__name__)
 
-# In-memory session store
-_SESSION_STORE: Dict[str, "SessionState"] = {}
+# In-memory cache (for performance)
+_SESSION_CACHE: Dict[str, "SessionState"] = {}
 
 # Session expiration (30 minutes inactivity)
 SESSION_TTL_SECONDS = 30 * 60
@@ -24,35 +24,41 @@ SESSION_TTL_SECONDS = 30 * 60
 
 class SessionState:
     """
-    In-memory session state container.
-
-    Stores conversational signals and recent analysis context.
-
-     NEW: Tracks current state for better context continuity.
+    Session state container with automatic MongoDB persistence.
     """
 
     def __init__(self, session_id: str):
         self.session_id = session_id
 
-        # Conversational memory (signals only)
+        # ✅ ENHANCED: Store ALL messages
+        self.all_messages: list[dict] = []
         self.last_messages: list[dict] = []
+
+        # Conversational memory
         self.intents: List[str] = []
         self.severities: List[str] = []
         self.emotions: List[str] = []
         self.sentiments: List[str] = []
         self.started_at = datetime.now(timezone.utc)
 
-        #  NEW: Current conversation state (for context continuity)
+        # Current conversation state
         self.current_intent: str = "casual_chat"
         self.current_severity: str = "low"
         self.current_emotion: str = "neutral"
         self.current_sentiment: str = "neutral"
-        self.current_topic: Optional[str] = None  # e.g., "work stress", "sleep issues"
+        self.current_topic: Optional[str] = None
 
-        # Image-related context
+        # ✅ PERSISTENT: Image context
         self.last_image_analysis: Optional[dict] = None
+        self.last_image_type: Optional[str] = None
+        self.image_upload_message_index: Optional[int] = None
+
+        # ✅ PERSISTENT: Document context
         self.last_document_text: Optional[str] = None
         self.document_uploaded_at: Optional[float] = None
+        self.document_upload_message_index: Optional[int] = None
+
+        # Other context
         self.recent_topics: list[str] = []
         self.last_user_question: str | None = None
 
@@ -60,29 +66,228 @@ class SessionState:
         self.last_activity: float = time.time()
         self.has_health_context: bool = False
 
+    def to_dict(self) -> dict:
+        """
+        Serialize session state to dictionary for MongoDB storage.
+
+        Returns:
+            dict: Serializable session state
+        """
+        return {
+            "session_id": self.session_id,
+            "all_messages": self.all_messages,
+            "last_messages": self.last_messages,
+            "intents": self.intents,
+            "severities": self.severities,
+            "emotions": self.emotions,
+            "sentiments": self.sentiments,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "current_intent": self.current_intent,
+            "current_severity": self.current_severity,
+            "current_emotion": self.current_emotion,
+            "current_sentiment": self.current_sentiment,
+            "current_topic": self.current_topic,
+            "last_image_analysis": self.last_image_analysis,
+            "last_image_type": self.last_image_type,
+            "image_upload_message_index": self.image_upload_message_index,
+            "last_document_text": self.last_document_text,
+            "document_uploaded_at": self.document_uploaded_at,
+            "document_upload_message_index": self.document_upload_message_index,
+            "recent_topics": self.recent_topics,
+            "last_user_question": self.last_user_question,
+            "last_activity": self.last_activity,
+            "has_health_context": self.has_health_context,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SessionState":
+        """
+        Deserialize session state from dictionary.
+
+        Args:
+            data: Session state dictionary from MongoDB
+
+        Returns:
+            SessionState: Restored session state
+        """
+        state = cls(data["session_id"])
+
+        state.all_messages = data.get("all_messages", [])
+        state.last_messages = data.get("last_messages", [])
+        state.intents = data.get("intents", [])
+        state.severities = data.get("severities", [])
+        state.emotions = data.get("emotions", [])
+        state.sentiments = data.get("sentiments", [])
+
+        started_at_str = data.get("started_at")
+        if started_at_str:
+            state.started_at = datetime.fromisoformat(started_at_str)
+
+        state.current_intent = data.get("current_intent", "casual_chat")
+        state.current_severity = data.get("current_severity", "low")
+        state.current_emotion = data.get("current_emotion", "neutral")
+        state.current_sentiment = data.get("current_sentiment", "neutral")
+        state.current_topic = data.get("current_topic")
+
+        state.last_image_analysis = data.get("last_image_analysis")
+        state.last_image_type = data.get("last_image_type")
+        state.image_upload_message_index = data.get("image_upload_message_index")
+
+        state.last_document_text = data.get("last_document_text")
+        state.document_uploaded_at = data.get("document_uploaded_at")
+        state.document_upload_message_index = data.get("document_upload_message_index")
+
+        state.recent_topics = data.get("recent_topics", [])
+        state.last_user_question = data.get("last_user_question")
+        state.last_activity = data.get("last_activity", time.time())
+        state.has_health_context = data.get("has_health_context", False)
+
+        return state
+
     @classmethod
     def load(cls, session_id: str) -> "SessionState":
         """
-        Load or create session state.
+        Load session state from cache or MongoDB.
 
-        Automatically cleans up expired sessions.
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            SessionState: Loaded or new session state
         """
-        cleanup_expired_sessions()
-
-        if session_id not in _SESSION_STORE:
-            logger.info(
-                "Creating new session state",
+        # Check memory cache first (fast)
+        if session_id in _SESSION_CACHE:
+            state = _SESSION_CACHE[session_id]
+            state.touch()
+            logger.debug(
+                "Loaded session from cache",
                 extra={"session_id": session_id},
             )
-            _SESSION_STORE[session_id] = cls(session_id)
+            return state
 
-        state = _SESSION_STORE[session_id]
-        state.touch()
+        # Try loading from MongoDB (slower)
+        state_data = load_session_state(session_id)
+
+        if state_data:
+            state = cls.from_dict(state_data)
+            _SESSION_CACHE[session_id] = state
+            state.touch()
+            logger.info(
+                "Loaded session from MongoDB",
+                extra={"session_id": session_id},
+            )
+            return state
+
+        # Create new session
+        logger.info(
+            "Creating new session state",
+            extra={"session_id": session_id},
+        )
+        state = cls(session_id)
+        _SESSION_CACHE[session_id] = state
         return state
+
+    def save(self) -> None:
+        """
+        Persist session state to MongoDB.
+        """
+        try:
+            state_dict = self.to_dict()
+            success = save_session_state(self.session_id, state_dict)
+
+            if success:
+                logger.debug(
+                    "Session state saved to MongoDB",
+                    extra={"session_id": self.session_id},
+                )
+            else:
+                logger.warning(
+                    "Failed to save session state to MongoDB",
+                    extra={"session_id": self.session_id},
+                )
+        except Exception as exc:
+            logger.exception(
+                "Error saving session state",
+                extra={"session_id": self.session_id},
+            )
 
     def touch(self) -> None:
         """Update last activity timestamp."""
         self.last_activity = time.time()
+
+    def add_message(self, role: str, content: str) -> None:
+        """
+        Add a message to both complete history and recent cache.
+
+        Args:
+            role: 'user' or 'assistant'
+            content: Message content
+        """
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": time.time(),
+            "message_index": len(self.all_messages),
+        }
+
+        # Store in complete history
+        self.all_messages.append(message)
+
+        # Keep only last 10 in recent cache
+        self.last_messages.append(message)
+        if len(self.last_messages) > 10:
+            self.last_messages.pop(0)
+
+        logger.debug(
+            f"Added message to session state",
+            extra={
+                "session_id": self.session_id,
+                "role": role,
+                "total_messages": len(self.all_messages),
+            },
+        )
+
+    def get_conversation_window(self, max_messages: int = 15) -> list[dict]:
+        """Get a sliding window of recent conversation."""
+        return self.all_messages[-max_messages:] if self.all_messages else []
+
+    def get_condensed_history(self) -> str:
+        """Get a condensed summary of older messages."""
+        if len(self.all_messages) <= 15:
+            return ""
+
+        older_messages = self.all_messages[:-15]
+        topics_discussed = set()
+
+        for msg in older_messages:
+            content = msg.get("content", "").lower()
+            health_keywords = [
+                "headache",
+                "pain",
+                "stress",
+                "anxiety",
+                "sleep",
+                "tired",
+                "fatigue",
+                "nausea",
+                "fever",
+                "cough",
+                "document",
+                "report",
+                "x-ray",
+                "image",
+            ]
+
+            for keyword in health_keywords:
+                if keyword in content:
+                    topics_discussed.add(keyword)
+
+        if topics_discussed:
+            return f"Earlier in conversation, discussed: {', '.join(topics_discussed)}"
+
+        return "Earlier conversation covered general health topics"
+
+    # ... (keep all other existing methods like update_from_llm, clear_document_context, etc.)
 
     def clear_document_context(self) -> None:
         """
@@ -91,6 +296,7 @@ class SessionState:
         """
         self.last_document_text = None
         self.document_uploaded_at = None
+        self.document_upload_message_index = None
         logger.info("Document context cleared", extra={"session_id": self.session_id})
 
     def is_document_context_stale(self, max_age_seconds: int = 300) -> bool:
@@ -110,11 +316,7 @@ class SessionState:
         return age > max_age_seconds
 
     def update_from_llm(self, llm_result: dict) -> None:
-        """
-        Update session signals based on LLM output.
-
-         ENHANCED: Now updates current state for better context continuity.
-        """
+        """Update session signals based on LLM output."""
         if not isinstance(llm_result, dict):
             logger.warning(
                 "Invalid LLM result type",
@@ -127,7 +329,6 @@ class SessionState:
             self.intents.append(intent)
             self.current_intent = intent
 
-            # MARK HEALTH CONTEXT AS ACTIVE (CRITICAL)
             if intent in {
                 "health_support",
                 "self_care",
@@ -152,16 +353,14 @@ class SessionState:
             self.sentiments.append(sentiment)
             self.current_sentiment = sentiment
 
-        #  NEW: Extract topic from user's last message if severity is moderate/high
-        if severity in ["moderate", "high"] and self.last_messages:
+        if severity in ["moderate", "high"] and self.all_messages:
             last_user_msg = None
-            for msg in reversed(self.last_messages):
+            for msg in reversed(self.all_messages):
                 if msg.get("role") == "user":
                     last_user_msg = msg.get("content", "").lower()
                     break
 
             if last_user_msg:
-                # Simple topic extraction from keywords
                 if "stress" in last_user_msg or "stressed" in last_user_msg:
                     self.current_topic = "stress"
                 elif "sleep" in last_user_msg or "insomnia" in last_user_msg:
@@ -176,12 +375,7 @@ class SessionState:
                     self.current_topic = "low mood"
 
     def get_current_context(self) -> dict:
-        """
-         NEW: Get current conversation context for prompt building.
-
-        Returns:
-            Dict with current intent, severity, emotion, and topic
-        """
+        """Get current conversation context for prompt building."""
         return {
             "intent": self.current_intent,
             "severity": self.current_severity,
@@ -196,11 +390,7 @@ class SessionState:
         self.last_image_analysis = image_analysis
 
     def save(self) -> None:
-        """
-        Persist session state.
-
-        Currently a no-op as state is in-memory.
-        """
+        """Persist session state (currently in-memory)."""
         logger.debug(
             "Session state updated",
             extra={"session_id": self.session_id},
@@ -216,12 +406,12 @@ def cleanup_expired_sessions() -> None:
     now = time.time()
     expired_sessions = [
         session_id
-        for session_id, state in _SESSION_STORE.items()
+        for session_id, state in _SESSION_CACHE.items()
         if now - state.last_activity > SESSION_TTL_SECONDS
     ]
 
     for session_id in expired_sessions:
-        _SESSION_STORE.pop(session_id, None)
+        _SESSION_CACHE.pop(session_id, None)
         logger.info(
             "Expired session cleared from memory",
             extra={"session_id": session_id},

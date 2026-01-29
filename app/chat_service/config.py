@@ -4,7 +4,7 @@ Application configuration.
 Centralized environment-based settings using Pydantic v2.
 """
 
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict, Field
@@ -67,7 +67,9 @@ class Settings(BaseSettings):
     # CNN settings
     # --------------------
     RISK_THRESHOLD: float = 0.5
-
+    # stt
+    DEEPGRAM_API_KEY: str
+    SENTRY_DSN: Optional[str] = None
     # Cross-session memory settings
     SESSION_MEMORY_ENABLED: bool = True
     SESSION_MEMORY_LOOKBACK_DAYS: int = 7
@@ -75,7 +77,7 @@ class Settings(BaseSettings):
     model_config = ConfigDict(
         env_file=".env",
         env_prefix="CURAMYN_",
-        extra="forbid",
+        extra="ignore",
     )
 
 

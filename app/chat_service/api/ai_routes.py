@@ -27,6 +27,7 @@ from fastapi import (
 from app.chat_service.repositories.session_repositories import (
     append_chat_message,
 )
+from app.common.audit_logger import log_document_upload, AuditLogger, AuditEventType
 from app.chat_service.services.orchestrator.orchestrator import run_interaction
 from app.chat_service.utils.logger import get_logger
 from app.core.dependencies import get_current_user
@@ -65,7 +66,7 @@ async def ai_interact(
 
     user_id = user["sub"]
     session_id = session_id or str(uuid.uuid4())
-
+    ip_address = getattr(request.state, "ip_address", "unknown")
     # -----------------------------
     # VALIDATION
     # -----------------------------
@@ -112,7 +113,26 @@ async def ai_interact(
             "response_keys": list(result.keys()),
         },
     )
+    # AUDIT LOG: Document upload
+    if input_type == "image" and image_type == "document" and image:
+        log_document_upload(
+            user_id=user_id,
+            session_id=session_id,
+            ip_address=ip_address,
+            document_size=len(await image.read()),
+            document_type=image.content_type or "unknown",
+        )
+        await image.seek(0)  # Reset file pointer
 
+    #  AUDIT LOG: Image upload
+    if input_type == "image" and image_type in ["xray", "skin"]:
+        AuditLogger.log_event(
+            event_type=AuditEventType.IMAGE_UPLOADED,
+            user_id=user_id,
+            session_id=session_id,
+            ip_address=ip_address,
+            details={"image_type": image_type},
+        )
     # -----------------------------
     # PERSIST CHAT MESSAGES
     # -----------------------------

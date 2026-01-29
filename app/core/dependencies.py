@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.chat_service.utils.logger import get_logger
 from app.core.security import verify_access_token
+import sentry_sdk
 
 logger = get_logger(__name__)
 
@@ -35,23 +36,30 @@ def get_current_user(
     """
     Retrieve the currently authenticated user.
     """
+
     token = credentials.credentials
 
     try:
         user = verify_access_token(token)
-
-        # 🔑 IMPORTANT: attach user to request state
         request.state.user = user
 
-        logger.info(
-            "Authenticated user request",
-            extra={"user_id": user.get("sub")},
+        # ✅ Add user context to Sentry
+        sentry_sdk.set_user(
+            {
+                "id": user.get("sub"),
+                "email": user.get("email"),
+            }
         )
 
+        logger.info("Authenticated user request", extra={"user_id": user.get("sub")})
         return user
 
     except ValueError as exc:
         logger.warning("Authentication failed")
+
+        # ✅ Capture failed auth in Sentry
+        sentry_sdk.capture_exception(exc)
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

@@ -11,6 +11,7 @@ from app.core.dependencies import get_current_user
 from app.chat_service.services.orchestrator.session_lifecycle import end_session
 from app.user_service.service import authenticate_user, create_user
 from app.core.security import create_access_token
+from app.common.audit_logger import log_login
 from app.chat_service.utils.logger import get_logger
 from app.user_service.schemas import (
     TokenResponse,
@@ -77,26 +78,18 @@ def signup(request: Request, payload: UserSignup) -> UserResponse:
         ) from exc
 
 
-@router.post(
-    "/login",
-    response_model=TokenResponse,
-    status_code=status.HTTP_200_OK,
-)
+@router.post("/auth/login")
 @limiter.limit("5/minute")
 def login(request: Request, payload: UserLogin) -> TokenResponse:
-    """
-    Authenticate user and issue JWT token.
-    Session starts here.
-    """
-    try:
-        logger.info(
-            "Login attempt",
-            extra={"email": payload.email},
-        )
+    """Authenticate user and issue JWT token."""
 
+    ip_address = getattr(request.state, "ip_address", "unknown")
+    user_agent = getattr(request.state, "user_agent", "unknown")
+
+    try:
         user = authenticate_user(payload.email, payload.password)
 
-        session_id = str(uuid.uuid4())  #  START SESSION
+        session_id = str(uuid.uuid4())
 
         access_token = create_access_token(
             {
@@ -106,10 +99,15 @@ def login(request: Request, payload: UserLogin) -> TokenResponse:
             }
         )
 
-        logger.info(
-            "Login successful",
-            extra={"email": payload.email, "session_id": session_id},
+        # ✅ AUDIT LOG: Successful login
+        log_login(
+            user_id=user["user_id"],
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=True,
         )
+
+        logger.info("Login successful", extra={"email": payload.email})
 
         return {
             "access_token": access_token,
@@ -118,10 +116,16 @@ def login(request: Request, payload: UserLogin) -> TokenResponse:
         }
 
     except ValueError:
-        logger.warning(
-            "Login failed: invalid credentials",
-            extra={"email": payload.email},
+        # ✅ AUDIT LOG: Failed login
+        log_login(
+            user_id=payload.email,  # Use email since we don't have user_id
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
         )
+
+        logger.warning("Login failed", extra={"email": payload.email})
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",

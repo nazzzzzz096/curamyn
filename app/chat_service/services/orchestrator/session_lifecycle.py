@@ -8,7 +8,7 @@ and cleanup of in-memory session state.
 from datetime import datetime, timezone
 
 from app.chat_service.services.orchestrator.session_state import (
-    _SESSION_STORE,
+    _SESSION_CACHE,
 )
 from app.chat_service.services.session_summary_service import (
     generate_session_summary,
@@ -32,7 +32,7 @@ def end_session(*, session_id: str, user_id: str) -> None:
 
     This function is called ONLY on logout.
     """
-    state = _SESSION_STORE.get(session_id)
+    state = _SESSION_CACHE.get(session_id)
 
     if not state:
         logger.info(
@@ -72,7 +72,7 @@ def end_session(*, session_id: str, user_id: str) -> None:
             )
 
     #  Always delete session memory
-    _SESSION_STORE.pop(session_id, None)
+    _SESSION_CACHE.pop(session_id, None)
 
     logger.info(
         "Session memory cleared",

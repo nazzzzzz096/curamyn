@@ -67,6 +67,63 @@ def analyze_health_text(
         "You do not have to handle this alone."
     )
 
+    #  NEW: Detect if user is starting a NEW topic after closure
+    is_new_topic = any(
+        keyword in text.lower()
+        for keyword in [
+            "but ",
+            "however",
+            "also",
+            "what about",
+            "can you",
+            "i want to",
+            "let's talk about",
+            "another thing",
+            "by the way",
+        ]
+    )
+
+    #  Check if user is asking for tips/suggestions
+    wants_suggestions = any(
+        keyword in text.lower()
+        for keyword in [
+            "suggest",
+            "suggestions",
+            "tip",
+            "tips",
+            "advice",
+            "help me",
+            "what can i do",
+            "what should i do",
+            "give me",
+        ]
+    )
+
+    #  If new topic detected, SKIP closure check
+    if wants_suggestions or is_new_topic:
+        logger.info("User requested suggestions or new topic - routing to LLM")
+        # Continue to LLM generation
+
+    # Simple acknowledgments get minimal responses
+    elif _is_acknowledgement(text):
+        logger.info("User acknowledgement detected — minimal response")
+        return {
+            "intent": "health_support",
+            "severity": (
+                session_context.get("severity", "low") if session_context else "low"
+            ),
+            "response_text": "I'm here with you. Let me know if you need anything.",
+        }
+
+    # Conversation closure ONLY if it's a standalone positive statement
+    elif _is_closure(text) and not is_new_topic:
+        logger.info("Conversation closure detected")
+        return {
+            "intent": "health_support",
+            "severity": "low",
+            "response_text": "I'm really glad to hear that. Take care, and I'm here if you need me again.",
+        }
+
     # Simple acknowledgments get minimal responses
     if _is_acknowledgement(text):
         logger.info("User acknowledgement detected — minimal response")
@@ -225,25 +282,21 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
         if context.get("topic"):
             context_lines.append(f"Current topic: {context.get('topic')}")
 
-        # NEW: Flag if this relates to past conversations
-        if context.get("has_past_context"):
-            context_lines.append(
-                "⚠️ IMPORTANT: User has discussed similar concerns before. "
-                "See [RELEVANT PAST CONVERSATIONS] section in the user message. "
-                "Acknowledge continuity naturally if appropriate."
-            )
-
         if context_lines:
             context_block = (
                 "\n\n[CONTEXT FROM CURRENT SESSION]\n" + "\n".join(context_lines) + "\n"
             )
 
-    # Adapt mode based on whether we have context
-    if wants_steps:
-        if context and context.get("topic"):
-            mode = f"Provide 3–5 gentle, practical steps specifically to help with their {context.get('topic')}."
-        else:
-            mode = "Provide 3–5 gentle, practical self-care steps."
+    #  Detect if user wants document summary
+    wants_doc_summary = any(
+        phrase in text.lower()
+        for phrase in ["what was in", "summarize", "main findings", "overview"]
+    )
+
+    if wants_doc_summary:
+        mode = "Provide a clear summary of the document content mentioned in the context. Highlight key findings factually without diagnosis."
+    elif wants_steps:
+        mode = "Provide 3–5 gentle, practical self-care steps."
     else:
         mode = "Provide a warm, empathetic, and conversational response."
 
@@ -253,58 +306,14 @@ You are Curamyn, a warm, empathetic, and supportive wellbeing companion.
 
 Your personality:
 - Kind, caring, and genuinely interested in the person's wellbeing
-- Speak naturally like a supportive friend
-- Offer encouragement, validation, and gentle suggestions
-- You can think deeply and respond thoughtfully - no constraints
-
-CRITICAL INSTRUCTIONS FOR PAST CONVERSATION REFERENCES:
-
-✅ **IF YOU SEE "📋 RELEVANT PAST CONVERSATIONS:" in the user's message:**
-   1. Acknowledge naturally and warmly:
-      - "I remember we talked about your [specific topic] before..."
-      - "You mentioned [specific detail from past conversation]..."
-   
-   2. Show continuity with specific questions:
-      - "Is [the issue] still bothering you?"
-      - "How long has this been going on since we last spoke?"
-      - "Has the situation changed at all?"
-   
-   3. Reference past context if mentioned:
-      - Duration: "You said it had been going on for [X days/weeks]..."
-      - Actions: "You mentioned trying [specific action]. Did that help?"
-      - Triggers: "Last time you said [trigger] made it worse..."
-   
-   4. Be empathetic about the continuity:
-      - "I'm glad you're comfortable sharing this with me again."
-      - "Thank you for trusting me with this ongoing concern."
-      - "I can see this has been persistent for you."
-   
-   5. Ask CALM follow-up questions (don't overwhelm):
-      - "How are you feeling about it now?"
-      - "Have you been able to try any of the suggestions we discussed?"
-      - "What would help you most right now?"
-
-⚠️ **IMPORTANT RULES:**
-- Do NOT diagnose medical conditions
-- Do NOT name specific medicines or treatments
-- Do NOT say "consult a doctor" unless severity is HIGH
-- If you see past medical actions (medications, doctor visits), acknowledge WITHOUT commenting on medical appropriateness
-- Focus on emotional support and wellness guidance
-
-📝 **Response Guidelines:**
-- Natural, flowing conversation (not bullet points unless user asks for tips)
-- Express genuine care and empathy
-- Ask 1-2 gentle follow-up questions maximum
-- Warm, personal, human tone
-- Keep responses concise but thoughtful (3-5 sentences unless giving tips)
+- Provide factual information when asked about documents
+- Do NOT diagnose or interpret medical results
 
 Your current task:
 {mode}
 
-Now respond to the user's message:
+User's message:
 {text}
-
-Remember: If you see past conversation context above, acknowledge it naturally and show continuity of care.
 """.strip()
 
 
@@ -384,18 +393,19 @@ def _is_acknowledgement(text: str) -> bool:
 def _is_closure(text: str) -> bool:
     """Check if user is ending conversation positively."""
     text = text.strip().lower()
-    return any(
-        phrase in text
-        for phrase in [
-            "i feel good",
-            "feels good now",
-            "i am fine",
-            "i feel better",
-            "thank you",
-            "thanks",
-            "appreciate it",
-            "that helped",
-            "i'm okay now",
-            "feeling better",
-        ]
-    )
+
+    # MORE SPECIFIC: Only match if BOTH positive sentiment AND closure words
+    closure_phrases = [
+        "i feel good now",
+        "i feel better now",
+        "i'm okay now",
+        "feeling much better",
+        "that really helped",
+        "i'm fine now",
+    ]
+
+    # Only treat as closure if it's a short, conclusive statement
+    if len(text.split()) > 8:  # Longer messages are likely questions
+        return False
+
+    return any(phrase in text for phrase in closure_phrases)

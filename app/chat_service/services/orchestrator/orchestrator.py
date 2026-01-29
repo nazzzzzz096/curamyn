@@ -14,7 +14,7 @@ final response generation, with integrated safety checks and memory management.
 """
 
 from typing import Any, Dict
-from datetime import time
+import time
 from app.chat_service.services.orchestrator.input_router import route_input
 from app.chat_service.services.orchestrator.session_state import SessionState
 from app.chat_service.services.orchestrator.response_builder import build_response
@@ -56,22 +56,8 @@ async def run_interaction(
     image_type: str | None,
     response_mode: str,
 ) -> Dict[str, Any]:
-    """
-    Orchestrates a single user interaction lifecycle.
+    """Orchestrates a single user interaction lifecycle."""
 
-    Args:
-        input_type: Type of input (text, audio, image).
-        session_id: Active session identifier.
-        user_id: Optional user ID for consent lookup.
-        text: Raw text input.
-        audio: Audio bytes input.
-        image: Image bytes input.
-        image_type: Image subtype (e.g., document).
-        response_mode: Desired response mode (text/voice).
-
-    Returns:
-        A response dictionary suitable for API output.
-    """
     logger.info(
         "Interaction started",
         extra={"session_id": session_id, "input_type": input_type},
@@ -91,14 +77,29 @@ async def run_interaction(
             image_type=image_type,
         )
 
-        # Store document text if this is a document upload
+        # ✅ Store document text + track when it was uploaded
         if input_type == "image" and image_type == "document" and normalized_text:
             state.last_document_text = normalized_text
-            logger.info("Stored document text for future educational queries")
+            state.document_uploaded_at = time.time()
+            state.document_upload_message_index = len(
+                state.all_messages
+            )  # ✅ Track position
+            logger.info("Stored document text with message index")
 
-        # adding agents CONTEXT AGENT (conversation continuity)
-        # Inject summary + session memory ONCE here
+        # ✅ Store image analysis + track when it was uploaded
+        if context.get("image_analysis"):
+            state.last_image_analysis = context["image_analysis"]
+            state.last_image_type = image_type
+            state.image_upload_message_index = len(
+                state.all_messages
+            )  # ✅ Track position
+            state.save()
+            logger.info(
+                "Stored image analysis with message index",
+                extra={"image_type": image_type},
+            )
 
+        # Build enriched context
         enriched_text = ContextAgent.build_input(
             user_input=normalized_text,
             input_type=input_type,
@@ -106,6 +107,7 @@ async def run_interaction(
             session_id=session_id,
             session_state=state,
         )
+
         # ================== VOICE SHORT-CIRCUIT ==================
         if input_type == "audio":
             logger.info("Routing to voice chat pipeline")
@@ -113,6 +115,7 @@ async def run_interaction(
             voice_response = await voice_chat_pipeline(
                 audio_bytes=audio,
                 user_id=user_id,
+                session_state=state,
             )
 
             state.update_from_llm(voice_response)
@@ -147,19 +150,10 @@ async def run_interaction(
 
         logger.info("Interaction completed", extra={"session_id": session_id})
         response["session_id"] = state.session_id
-        state.last_messages.append(
-            {
-                "role": "user",
-                "content": normalized_text,
-            }
-        )
 
-        state.last_messages.append(
-            {
-                "role": "assistant",
-                "content": llm_result.get("response_text", ""),
-            }
-        )
+        # ✅ Use new add_message method
+        state.add_message("user", normalized_text)
+        state.add_message("assistant", llm_result.get("response_text", ""))
 
         return response
 
@@ -475,47 +469,56 @@ def _route_llm(
     # ==========================================================
     # TEXT INPUT - SMART ROUTING
     # ==========================================================
+
     if input_type == "text":
 
-        # CHECK 1: Is user explicitly changing topics?
+        # CHECK 1: Topic change
         if _is_topic_change(normalized_text):
             logger.info("Topic change detected - clearing document context")
             state.clear_document_context()
-
-            #  Get session context and pass it
             session_context = state.get_current_context()
-
             return analyze_health_text(
                 text=normalized_text,
                 user_id=user_id,
                 session_context=session_context,
             )
 
-        # CHECK 2: Is document context too old?
+        # CHECK 2: Document context staleness
         if state.last_document_text and state.is_document_context_stale(
             max_age_seconds=600
         ):
             logger.info("Document context expired (>10 minutes) - clearing")
             state.clear_document_context()
 
-        # CHECK 3: Educational mode
+        # ✅ NEW CHECK 3: Full document summary request
         if state.last_document_text:
-            is_medical_question = _is_asking_about_medical_terms(
-                normalized_text, state.last_document_text
+            wants_full_summary = any(
+                phrase in normalized_text.lower()
+                for phrase in [
+                    "what was in",
+                    "what did the report",
+                    "summarize my report",
+                    "summary of",
+                    "overview of",
+                    "main findings",
+                ]
             )
 
-            logger.info(
-                "Document context check",
-                extra={
-                    "has_document": True,
-                    "question": normalized_text[:100],
-                    "is_medical_question": is_medical_question,
-                    "document_age_seconds": (
-                        time.time() - state.document_uploaded_at
-                        if state.document_uploaded_at
-                        else 0
-                    ),
-                },
+            if wants_full_summary:
+                logger.info("✓ Routing to health advisor WITH document context")
+                session_context = state.get_current_context()
+
+                # ✅ Pass document context to health advisor
+                return analyze_health_text(
+                    text=normalized_text,
+                    user_id=user_id,
+                    session_context=session_context,
+                    # Document context is already in enriched_text via ContextAgent
+                )
+
+            # CHECK 4: Specific medical term explanation
+            is_medical_question = _is_asking_about_medical_terms(
+                normalized_text, state.last_document_text
             )
 
             if is_medical_question:
@@ -525,15 +528,10 @@ def _route_llm(
                     document_text=state.last_document_text,
                     user_id=user_id,
                 )
-            else:
-                logger.info("✗ Not a medical question, routing to health advisor")
 
-        # DEFAULT: Health advisor for general conversations
+        # DEFAULT: Health advisor
         logger.info("Routing to health advisor (general conversation)")
-
-        #  NEW: Get session context and pass it
         session_context = state.get_current_context()
-
         return analyze_health_text(
             text=normalized_text,
             user_id=user_id,

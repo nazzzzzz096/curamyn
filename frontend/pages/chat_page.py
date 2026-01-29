@@ -508,27 +508,13 @@ def _render_input_bar() -> None:
 
             # ---------- INPUT TYPE MENU ----------
             with ui.menu() as type_menu:
-                ui.menu_item(
-                    "Text",
-                    on_click=_set_text_mode,
-                )
-                ui.menu_item(
-                    "X-ray",
-                    on_click=lambda: _set_image_mode("xray"),
-                )
-                ui.menu_item(
-                    "Skin",
-                    on_click=lambda: _set_image_mode("skin"),
-                )
-                ui.menu_item(
-                    "Document",
-                    on_click=_set_document_mode,
-                )
+                ui.menu_item("Text", on_click=_set_text_mode)
+                ui.menu_item("X-ray", on_click=lambda: _set_image_mode("xray"))
+                ui.menu_item("Skin", on_click=lambda: _set_image_mode("skin"))
+                ui.menu_item("Document", on_click=_set_document_mode)
 
-            ui.button(
-                "+ TYPE",
-                on_click=type_menu.open,
-            )
+            #  ONLY open on explicit button click
+            ui.button("+ TYPE", on_click=type_menu.open)
 
             # ---------- FILE UPLOAD ----------
             UPLOAD_WIDGET = ui.upload(
@@ -539,20 +525,11 @@ def _render_input_bar() -> None:
             # ---------- TEXT INPUT ----------
             input_box = ui.input("Message Curamyn...").classes("flex-1 min-w-[400px]")
 
-            ui.button(
-                "➤",
-                on_click=lambda: _send(input_box),
-            )
+            ui.button("➤", on_click=lambda: _send(input_box))
 
             # ---------- AUDIO CONTROLS ----------
-            ui.button(
-                "🎤 Record",
-                on_click=_start_recording,
-            )
-            ui.button(
-                "🛑 Stop",
-                on_click=_stop_recording,
-            )
+            ui.button("🎤 Record", on_click=_start_recording)
+            ui.button("🛑 Stop", on_click=_stop_recording)
 
 
 def _start_recording() -> None:
