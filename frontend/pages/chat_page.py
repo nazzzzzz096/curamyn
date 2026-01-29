@@ -36,6 +36,7 @@ PENDING_FILE_BYTES = None
 
 CONSENT_MENU = None
 DELETE_DIALOG = None
+MODE_LABEL = None
 
 
 # =================================================
@@ -121,18 +122,30 @@ def _hide_typing_indicator():
 # =================================================
 def show_chat_page() -> None:
     """
-    Render the main chat page and load chat history safely.
-
-    Flow:
-    - Build UI
-    - After page load, browser calls internal endpoint
-    - Internal endpoint renders history inside active UI slot
+    Main chat page with working mode indicator
     """
-    global CHAT_CONTAINER, CONSENT_MENU, DELETE_DIALOG
+    global CHAT_CONTAINER, CONSENT_MENU, DELETE_DIALOG, MODE_LABEL
 
     logger.debug("Rendering chat page")
 
     ui.dark_mode().enable()
+
+    # Add CSS to prevent accidental menu opening
+    ui.add_head_html(
+        """
+    <style>
+        /* Disable hover/touch activation for menu */
+        .q-menu {
+            pointer-events: auto !important;
+        }
+        
+        /* Prevent accidental activation */
+        .q-btn--round:hover .q-menu {
+            display: none !important;
+        }
+    </style>
+    """
+    )
 
     # ================= DELETE MEMORY DIALOG =================
     DELETE_DIALOG = ui.dialog()
@@ -170,16 +183,22 @@ def show_chat_page() -> None:
                 extra={"chat_container_ready": True},
             )
 
+        #  Mode indicator INSIDE the layout (before input bar)
+        with ui.column().classes("w-full bg-slate-900/50 px-4 py-2 shrink-0"):
+            MODE_LABEL = ui.label("📝 Current mode: TEXT").classes(
+                "text-xs text-slate-400 text-center"
+            )
+
         # ---------- INPUT BAR ----------
         _render_input_bar()
 
-    #  Browser triggers history load AFTER DOM + slot exist
+    # Browser triggers history load AFTER DOM + slot exist
     ui.run_javascript(
         """
         setTimeout(() => {
             fetch('/_nicegui_internal/load_history', { method: 'POST' });
         }, 50);
-        """
+    """
     )
 
 
@@ -198,7 +217,7 @@ def load_history_ui() -> dict:
     try:
         CHAT_CONTAINER.clear()
 
-        # ✅ ALWAYS show welcome message at session start
+        #  ALWAYS show welcome message at session start
         with CHAT_CONTAINER:
             _add_ai("Hi 👋 How can I help you today?")
 
@@ -251,12 +270,12 @@ def _add_user(text: str) -> None:
     state.messages.append(msg)
 
     if CHAT_CONTAINER:
-        with CHAT_CONTAINER:  # ✅ Ensure slot context
+        with CHAT_CONTAINER:  # Ensure slot context
             _render_message(msg, CHAT_CONTAINER)
 
     _store_message_js(msg)
 
-    # ✅ Scroll in slot context
+    #  Scroll in slot context
     if CHAT_CONTAINER:
         with CHAT_CONTAINER:
             _scroll_to_bottom()
@@ -486,50 +505,86 @@ def _render_consent_menu():
 # =================================================
 def _render_input_bar() -> None:
     """
-    Render the chat input bar.
-
-    This includes:
-    - Input type selection (text, image, document)
-    - File upload widget
-    - Text input
-    - Audio record / stop controls
-
-    Modifies global UI reference:
-        - UPLOAD_WIDGET
+    Input bar with explicit button - prevents accidental menu opening
     """
     global UPLOAD_WIDGET
 
-    logger.debug("Rendering chat input bar")
+    logger.debug("Rendering chat input bar with fixed UI")
 
     with ui.element("div").classes(
         "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
     ):
         with ui.row().classes("w-full px-4 items-center gap-2"):
 
-            # ---------- INPUT TYPE MENU ----------
+            # ---------- INPUT TYPE MENU (EXPLICIT BUTTON) ----------
             with ui.menu() as type_menu:
-                ui.menu_item("Text", on_click=_set_text_mode)
-                ui.menu_item("X-ray", on_click=lambda: _set_image_mode("xray"))
-                ui.menu_item("Skin", on_click=lambda: _set_image_mode("skin"))
-                ui.menu_item("Document", on_click=_set_document_mode)
+                ui.menu_item("💬 Text", on_click=_set_text_mode)
+                ui.separator()
+                ui.menu_item("🩻 X-ray Image", on_click=lambda: _set_image_mode("xray"))
+                ui.menu_item("🔬 Skin Image", on_click=lambda: _set_image_mode("skin"))
+                ui.menu_item("📄 Medical Document", on_click=_set_document_mode)
 
-            #  ONLY open on explicit button click
-            ui.button("+ TYPE", on_click=type_menu.open)
+            #  Use icon button with explicit click handler - prevents touch/hover activation
+            ui.button(
+                icon="add_circle",
+                on_click=type_menu.open,  # Only opens on explicit click
+            ).props(
+                "flat round"  # No hover effects
+            ).classes(
+                "text-slate-400 hover:text-emerald-400"
+            ).tooltip(
+                "Change Input Type (Click)"
+            )
 
-            # ---------- FILE UPLOAD ----------
-            UPLOAD_WIDGET = ui.upload(
-                auto_upload=True,
-                on_upload=_on_file_selected,
-            ).props("accept=*/*")
+            # ---------- FILE UPLOAD (HIDDEN) ----------
+            UPLOAD_WIDGET = (
+                ui.upload(
+                    auto_upload=True,
+                    on_upload=_on_file_selected,
+                )
+                .props("accept=*/*")
+                .classes("hidden")
+            )
 
             # ---------- TEXT INPUT ----------
-            input_box = ui.input("Message Curamyn...").classes("flex-1 min-w-[400px]")
+            input_box = (
+                ui.input(placeholder="Type your message...")
+                .props("outlined dense dark")
+                .classes("flex-1 bg-slate-800/50 rounded-xl border-slate-700")
+            )
 
-            ui.button("➤", on_click=lambda: _send(input_box))
+            #  Enter key handler
+            input_box.on(
+                "keydown.enter", lambda e: asyncio.create_task(_send(input_box))
+            )
 
-            # ---------- AUDIO CONTROLS ----------
-            ui.button("🎤 Record", on_click=_start_recording)
-            ui.button("🛑 Stop", on_click=_stop_recording)
+            # ---------- SEND BUTTON ----------
+            ui.button(
+                icon="send",
+                on_click=lambda: asyncio.create_task(_send(input_box)),
+            ).props("round color=emerald").classes(
+                "shadow-lg hover:shadow-emerald-500/50"
+            ).tooltip(
+                "Send Message"
+            )
+
+            # ---------- VOICE CONTROLS ----------
+            with ui.row().classes("gap-1"):
+                ui.button(
+                    icon="mic",
+                    on_click=_start_recording,
+                ).props(
+                    "flat round"
+                ).classes("text-slate-400 hover:text-red-400").tooltip(
+                    "Start Recording"
+                )
+
+                ui.button(
+                    icon="stop",
+                    on_click=_stop_recording,
+                ).props(
+                    "flat round"
+                ).classes("text-slate-400 hover:text-red-500").tooltip("Stop Recording")
 
 
 def _start_recording() -> None:
@@ -717,48 +772,59 @@ async def send_voice(audio_array: list[int]) -> dict:
 
 
 def _set_text_mode() -> None:
-    """
-    Switch input mode to text.
-
-    Resets pending file state.
-    """
-    global CURRENT_MODE, CURRENT_IMAGE_TYPE, PENDING_FILE_BYTES
+    """Switch to text mode and update label."""
+    global CURRENT_MODE, CURRENT_IMAGE_TYPE, PENDING_FILE_BYTES, MODE_LABEL
 
     CURRENT_MODE = "text"
     CURRENT_IMAGE_TYPE = None
     PENDING_FILE_BYTES = None
 
-    logger.debug("Switched input mode to TEXT")
+    # Update the label
+    if MODE_LABEL:
+        MODE_LABEL.set_text("📝 Current mode: TEXT")
+
+    ui.notify("✓ Text mode", type="info", position="top", timeout=1000)
+    logger.debug("Switched to TEXT mode")
 
 
 def _set_image_mode(img_type: str) -> None:
-    """
-    Switch input mode to image.
-
-    Args:
-        img_type: Image type (e.g., 'skin', 'xray').
-    """
-    global CURRENT_MODE, CURRENT_IMAGE_TYPE
+    """CORRECTED: Switch to image mode and update label."""
+    global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "image"
     CURRENT_IMAGE_TYPE = img_type
 
-    logger.debug(
-        "Switched input mode to IMAGE",
-        extra={"image_type": img_type},
+    #  Update the label
+    if MODE_LABEL:
+        MODE_LABEL.set_text(f"🖼️ Current mode: {img_type.upper()} IMAGE")
+
+    ui.notify(
+        f"✓ {img_type.upper()} image mode - upload your image",
+        type="info",
+        position="top",
+        timeout=2000,
     )
+    logger.debug(f"Switched to IMAGE mode: {img_type}")
 
 
 def _set_document_mode() -> None:
-    """
-    Switch input mode to document upload.
-    """
-    global CURRENT_MODE, CURRENT_IMAGE_TYPE
+    """Switch to document mode and update label."""
+    global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "document"
     CURRENT_IMAGE_TYPE = "document"
 
-    logger.debug("Switched input mode to DOCUMENT")
+    #  Update the label
+    if MODE_LABEL:
+        MODE_LABEL.set_text("📄 Current mode: DOCUMENT")
+
+    ui.notify(
+        "✓ Document mode - upload your report",
+        type="info",
+        position="top",
+        timeout=2000,
+    )
+    logger.debug("Switched to DOCUMENT mode")
 
 
 # =================================================
@@ -823,19 +889,10 @@ async def _on_file_selected(event) -> None:
 # SEND
 # =================================================
 async def _send(input_box) -> None:
-    """
-    Send user input to the backend based on current mode.
+    """Send message and auto-reset mode."""
+    global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
-    Supports:
-    - text messages
-    - image / document uploads
-    """
-    global PENDING_FILE_BYTES
-
-    logger.debug(
-        "Sending message",
-        extra={"mode": CURRENT_MODE},
-    )
+    logger.debug(f"Sending message in {CURRENT_MODE} mode")
 
     if CURRENT_MODE == "text":
         text = input_box.value.strip()
@@ -851,29 +908,32 @@ async def _send(input_box) -> None:
             await _send_text(text)
         except Exception:
             logger.exception("Failed to send text message")
-            ui.notify(
-                "Failed to send message",
-                type="negative",
-            )
+            ui.notify("Failed to send message", type="negative")
 
         return
 
     # ---------- FILE MODE ----------
     if not PENDING_FILE_BYTES:
-        ui.notify(
-            "Select a file first",
-            type="warning",
-        )
+        ui.notify("Select a file first", type="warning")
         return
 
     try:
         await _send_file()
+
+        #  Auto-reset to TEXT mode
+        CURRENT_MODE = "text"
+        CURRENT_IMAGE_TYPE = None
+        PENDING_FILE_BYTES = None
+
+        #  Update label
+        if MODE_LABEL:
+            MODE_LABEL.set_text("📝 Current mode: TEXT")
+
+        logger.info("Auto-reset to TEXT mode after file upload")
+
     except Exception:
         logger.exception("Failed to send file")
-        ui.notify(
-            "Failed to send file",
-            type="negative",
-        )
+        ui.notify("Failed to send file", type="negative")
 
 
 def _handle_ai_response(response: dict) -> None:
@@ -1031,7 +1091,7 @@ async def _send_file() -> None:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
-        # ✅ Check for consent errors from backend (backup check)
+        #  Check for consent errors from backend (backup check)
         if response.get("message"):
             msg_lower = response.get("message", "").lower()
             if "consent" in msg_lower or "disabled" in msg_lower:
@@ -1068,7 +1128,7 @@ async def _send_file() -> None:
                     _add_ai(f"⚠️ {disclaimer}")
 
     except Exception as e:
-        # ✅ Safe cleanup on error
+        #  Safe cleanup on error
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()

@@ -1,8 +1,5 @@
 """
-Safety guard module.
-
-Enforces consent, blocks medical diagnosis/dosage requests,
-and detects emergency language.
+Safety guard with scope checking - refuses non-health queries
 """
 
 from typing import Dict
@@ -11,7 +8,7 @@ from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# --- Forbidden health patterns (deterministic) ---
+# --- Forbidden health patterns ---
 DIAGNOSIS_KEYWORDS = [
     "diagnose",
     "diagnosis",
@@ -37,6 +34,69 @@ EMERGENCY_KEYWORDS = [
     "heart attack",
     "collapse",
     "fainted",
+]
+
+# ✅ NEW: Out-of-scope (general knowledge) patterns
+GENERAL_KNOWLEDGE_PATTERNS = [
+    "who is",
+    "who was",
+    "when was",
+    "where is",
+    "what is the capital",
+    "tell me about",
+    "history of",
+    "biography",
+    "famous person",
+    "historical figure",
+    "politician",
+    "celebrity",
+    "actor",
+    "singer",
+    "sports",
+    "weather in",
+    "temperature in",
+    "news about",
+    "latest news",
+]
+
+# Health-related keywords (to avoid false positives)
+HEALTH_KEYWORDS = [
+    "symptom",
+    "health",
+    "medical",
+    "doctor",
+    "hospital",
+    "disease",
+    "condition",
+    "treatment",
+    "pain",
+    "ache",
+    "feel",
+    "feeling",
+    "sick",
+    "ill",
+    "medication",
+    "therapy",
+    "wellness",
+    "mental health",
+    "anxiety",
+    "depression",
+    "stress",
+    "sleep",
+    "tired",
+    "fatigue",
+    "diet",
+    "nutrition",
+    "exercise",
+    "weight",
+    "blood",
+    "pressure",
+    "sugar",
+    "cholesterol",
+    "heart",
+    "lung",
+    "kidney",
+    "liver",
 ]
 
 
@@ -72,13 +132,27 @@ def check_input_safety(
 
 def check_output_safety(*, user_text: str) -> None:
     """
-    Block forbidden medical requests.
+    Block forbidden medical requests and out-of-scope general knowledge questions.
     """
     if not user_text:
         return
 
     lowered = user_text.lower()
 
+    # ✅ NEW: Check for out-of-scope general knowledge questions
+    is_health_related = any(keyword in lowered for keyword in HEALTH_KEYWORDS)
+
+    if not is_health_related:
+        # Check if it's a general knowledge question
+        for pattern in GENERAL_KNOWLEDGE_PATTERNS:
+            if pattern in lowered:
+                logger.warning(f"General knowledge question detected: {pattern}")
+                raise SafetyViolation(
+                    "I'm here to help with health and wellness topics. "
+                    "For general information, please try a search engine or encyclopedia."
+                )
+
+    # Existing checks
     for word in DIAGNOSIS_KEYWORDS:
         if word in lowered:
             logger.warning("Diagnosis request blocked")

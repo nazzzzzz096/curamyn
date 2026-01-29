@@ -1,19 +1,17 @@
 """
-Health advisor LLM service.
-
-ENHANCED: Now uses session context (severity, emotion, topic) for better continuity
-and intelligently references past conversations when relevant.
+FIXED: Increase token limits to prevent response truncation
 """
 
 import os
 import time
-
 import mlflow
+from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
 
 logger = get_logger(__name__)
+load_dotenv()
 
 PRIMARY_MODEL = "models/gemini-flash-latest"
 FALLBACK_MODEL = "models/gemini-flash-lite-latest"
@@ -47,16 +45,7 @@ def analyze_health_text(
     session_context: dict | None = None,
 ) -> dict:
     """
-    Health advisor LLM with context awareness.
-
-    Args:
-        text: User's message (may include injected past conversation context)
-        user_id: Optional user identifier
-        image_context: Optional image analysis context
-        session_context: NEW - Current conversation state (severity, emotion, topic)
-
-    Returns:
-        Dict with intent, severity, emotion, and response_text
+    FIXED: Health advisor LLM with increased token limits to prevent truncation
     """
 
     client, GenerateContentConfig = _load_gemini()
@@ -67,7 +56,7 @@ def analyze_health_text(
         "You do not have to handle this alone."
     )
 
-    #  NEW: Detect if user is starting a NEW topic after closure
+    # Detect new topic or suggestions request
     is_new_topic = any(
         keyword in text.lower()
         for keyword in [
@@ -83,7 +72,6 @@ def analyze_health_text(
         ]
     )
 
-    #  Check if user is asking for tips/suggestions
     wants_suggestions = any(
         keyword in text.lower()
         for keyword in [
@@ -99,12 +87,9 @@ def analyze_health_text(
         ]
     )
 
-    #  If new topic detected, SKIP closure check
     if wants_suggestions or is_new_topic:
         logger.info("User requested suggestions or new topic - routing to LLM")
-        # Continue to LLM generation
 
-    # Simple acknowledgments get minimal responses
     elif _is_acknowledgement(text):
         logger.info("User acknowledgement detected — minimal response")
         return {
@@ -115,28 +100,7 @@ def analyze_health_text(
             "response_text": "I'm here with you. Let me know if you need anything.",
         }
 
-    # Conversation closure ONLY if it's a standalone positive statement
     elif _is_closure(text) and not is_new_topic:
-        logger.info("Conversation closure detected")
-        return {
-            "intent": "health_support",
-            "severity": "low",
-            "response_text": "I'm really glad to hear that. Take care, and I'm here if you need me again.",
-        }
-
-    # Simple acknowledgments get minimal responses
-    if _is_acknowledgement(text):
-        logger.info("User acknowledgement detected — minimal response")
-        return {
-            "intent": "health_support",
-            "severity": (
-                session_context.get("severity", "low") if session_context else "low"
-            ),
-            "response_text": "I'm here with you. Let me know if you need anything.",
-        }
-
-    # Conversation closure
-    if _is_closure(text):
         logger.info("Conversation closure detected")
         return {
             "intent": "health_support",
@@ -158,7 +122,6 @@ def analyze_health_text(
         for t in ["tip", "tips", "suggest", "what can i do", "help", "advice"]
     )
 
-    # Build prompt with session context
     prompt = _build_prompt(text, wants_steps, session_context)
 
     answer = ""
@@ -167,7 +130,6 @@ def analyze_health_text(
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "health_advisor_llm")
 
-        # Log context if available
         if session_context:
             mlflow_safe(mlflow.set_tag, "has_context", "true")
             mlflow_safe(
@@ -179,15 +141,10 @@ def analyze_health_text(
         try:
             response = client.models.generate_content(
                 model=PRIMARY_MODEL,
-                contents=[
-                    {
-                        "role": "user",
-                        "parts": [{"text": prompt}],
-                    }
-                ],
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
                 config=GenerateContentConfig(
                     temperature=0.7,
-                    max_output_tokens=900,
+                    max_output_tokens=1500,  # ✅ INCREASED from 900
                     top_p=0.9,
                 ),
             )
@@ -209,15 +166,10 @@ def analyze_health_text(
             try:
                 response = client.models.generate_content(
                     model=FALLBACK_MODEL,
-                    contents=[
-                        {
-                            "role": "user",
-                            "parts": [{"text": prompt}],
-                        }
-                    ],
+                    contents=[{"role": "user", "parts": [{"text": prompt}]}],
                     config=GenerateContentConfig(
                         temperature=0.7,
-                        max_output_tokens=900,
+                        max_output_tokens=1500,  # ✅ INCREASED from 900
                         top_p=0.9,
                     ),
                 )
@@ -234,13 +186,16 @@ def analyze_health_text(
             except Exception as exc:
                 logger.exception("Fallback model failed")
 
-        # FINAL SAFETY
         if not answer:
             logger.warning("LLM returned empty output — using SAFE_FALLBACK")
             answer = SAFE_FALLBACK
             model_used = "safe_fallback"
 
-        # MLFLOW METRICS
+        # ✅ CLEAN MARKDOWN from response
+        from app.chat_service.services.markdown_cleaner import clean_llm_response
+
+        answer = clean_llm_response(answer)
+
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
         mlflow_safe(mlflow.log_metric, "response_length", len(answer))
@@ -257,16 +212,8 @@ def analyze_health_text(
 
 
 def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
-    """
-    ENHANCED: Build prompt with session context awareness.
+    """Build prompt with session context awareness."""
 
-    Args:
-        text: Current user message (may already include past conversation context from ContextAgent)
-        wants_steps: Whether user wants practical tips
-        context: Session context with severity, emotion, topic
-    """
-
-    # Build context block if we have previous state
     context_block = ""
     if context and context.get("severity") not in ["low", "informational", None]:
         context_lines = []
@@ -287,7 +234,6 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
                 "\n\n[CONTEXT FROM CURRENT SESSION]\n" + "\n".join(context_lines) + "\n"
             )
 
-    #  Detect if user wants document summary
     wants_doc_summary = any(
         phrase in text.lower()
         for phrase in ["what was in", "summarize", "main findings", "overview"]
@@ -308,6 +254,8 @@ Your personality:
 - Kind, caring, and genuinely interested in the person's wellbeing
 - Provide factual information when asked about documents
 - Do NOT diagnose or interpret medical results
+- Do NOT use markdown formatting (**, *, __, etc.) - use plain text only
+- Complete all responses - never truncate mid-sentence
 
 Your current task:
 {mode}
@@ -318,20 +266,13 @@ User's message:
 
 
 def _infer_severity(text: str, context: dict = None) -> str:
-    """
-    Infer severity with context awareness.
-
-    If user says "give me tips" but context shows moderate/high severity,
-    maintain that severity level.
-    """
+    """Infer severity with context awareness."""
     text_lower = text.lower()
 
-    # If just asking for tips but we have existing severity context
     if any(word in text_lower for word in ["tips", "suggestions", "advice", "help"]):
         if context and context.get("severity") in ["moderate", "high"]:
             return context.get("severity")
 
-    # Otherwise, infer from current message
     crisis_words = ["suicide", "kill myself", "can't go on", "want to die"]
     high_words = ["can't cope", "overwhelming", "can't breathe", "panic"]
     moderate_words = ["stressed", "anxious", "worried", "struggling", "tired"]
@@ -373,7 +314,7 @@ def _extract_text(response) -> str:
 
 
 def _is_acknowledgement(text: str) -> bool:
-    """Check if text is simple acknowledgment (not greeting)."""
+    """Check if text is simple acknowledgment."""
     return text.strip().lower() in {
         "ok",
         "okay",
@@ -394,7 +335,6 @@ def _is_closure(text: str) -> bool:
     """Check if user is ending conversation positively."""
     text = text.strip().lower()
 
-    # MORE SPECIFIC: Only match if BOTH positive sentiment AND closure words
     closure_phrases = [
         "i feel good now",
         "i feel better now",
@@ -404,8 +344,7 @@ def _is_closure(text: str) -> bool:
         "i'm fine now",
     ]
 
-    # Only treat as closure if it's a short, conclusive statement
-    if len(text.split()) > 8:  # Longer messages are likely questions
+    if len(text.split()) > 8:
         return False
 
     return any(phrase in text for phrase in closure_phrases)

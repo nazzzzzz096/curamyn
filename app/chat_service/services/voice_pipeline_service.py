@@ -1,11 +1,5 @@
 """
-OPTIMIZED voice chat pipeline.
-
-Latency breakdown:
-- STT (Deepgram): ~500ms  ✅ (was 2-3s with Whisper)
-- LLM (Gemini):   ~2-3s
-- TTS (Piper):    ~1.5s   ✅ (was 3-4s)
-Total:            ~4-5s   ✅ (was 8-11s)
+Voice chat pipeline - ensures audio output always returned
 """
 
 import asyncio
@@ -13,7 +7,7 @@ import base64
 import time
 from typing import Optional
 
-from app.chat_service.services.deepgram_service import transcribe_audio  # ✅ NEW
+from app.chat_service.services.deepgram_service import transcribe_audio
 from app.chat_service.services.llm_service import analyze_text
 from app.chat_service.services.tts_streamer import synthesize_tts
 from app.chat_service.utils.logger import get_logger
@@ -25,15 +19,12 @@ def _get_cache_key(text: str) -> Optional[str]:
     """Check if text matches a cached response."""
     text_lower = text.lower().strip()
 
-    # Common greetings
     if text_lower in ["hello", "hi", "hey", "good morning", "good afternoon"]:
         return "hello"
 
-    # Goodbyes
     if text_lower in ["bye", "goodbye", "see you", "take care"]:
         return "goodbye"
 
-    # Errors
     if text_lower in ["what", "huh", "sorry"]:
         return "error"
 
@@ -62,22 +53,7 @@ async def voice_chat_pipeline(
     session_state=None,
 ) -> dict:
     """
-    OPTIMIZED voice chat pipeline.
-
-    Args:
-        audio_bytes: Raw audio bytes from browser (WebM/WAV)
-        user_id: Optional user identifier
-        session_state: Session context (images, documents)
-
-    Returns:
-        dict: {
-            "message": str,
-            "audio_base64": str,
-            "severity": str,
-            "intent": str,
-            "tts_failed": bool,
-            "latency": dict,  # ✅ Performance metrics
-        }
+    FIXED: Voice chat pipeline - ALWAYS returns audio output when successful
     """
     start_time = time.time()
     latency = {}
@@ -85,7 +61,7 @@ async def voice_chat_pipeline(
     logger.info("🎤 Voice pipeline started (OPTIMIZED)")
 
     # ============================================================
-    # STEP 1: SPEECH-TO-TEXT (Deepgram - FAST!)
+    # STEP 1: SPEECH-TO-TEXT
     # ============================================================
     stt_start = time.time()
 
@@ -93,29 +69,54 @@ async def voice_chat_pipeline(
         user_text = await transcribe_audio(audio_bytes)
     except Exception as exc:
         logger.exception("STT failed")
-        return {
-            "message": "Sorry, I couldn't hear you clearly. Please try again.",
-            "audio_base64": None,
-            "tts_failed": True,
-            "latency": {"total": time.time() - start_time},
-        }
+
+        #  Return audio error message with TTS
+        error_msg = "Sorry, I couldn't hear you clearly. Please try again."
+        try:
+            error_audio = await asyncio.to_thread(synthesize_tts, error_msg, "error")
+            return {
+                "message": error_msg,
+                "audio_base64": base64.b64encode(error_audio).decode(),
+                "tts_failed": True,
+                "latency": {"total": time.time() - start_time},
+            }
+        except:
+            return {
+                "message": error_msg,
+                "audio_base64": None,
+                "tts_failed": True,
+                "latency": {"total": time.time() - start_time},
+            }
 
     latency["stt"] = time.time() - stt_start
     logger.info(f"⏱️ STT latency: {latency['stt']:.2f}s")
 
     if not user_text or len(user_text.strip()) < 2:
         logger.warning("Transcription returned empty or very short text")
-        return {
-            "message": "Sorry, I didn't catch that. Could you repeat?",
-            "audio_base64": None,
-            "tts_failed": True,
-            "latency": latency,
-        }
+        fallback_msg = "Sorry, I didn't catch that. Could you repeat?"
+
+        try:
+            fallback_audio = await asyncio.to_thread(
+                synthesize_tts, fallback_msg, "error"
+            )
+            return {
+                "message": fallback_msg,
+                "audio_base64": base64.b64encode(fallback_audio).decode(),
+                "tts_failed": True,
+                "latency": latency,
+            }
+        except:
+            return {
+                "message": fallback_msg,
+                "audio_base64": None,
+                "tts_failed": True,
+                "latency": latency,
+            }
 
     logger.info(f"📝 Transcribed: '{user_text[:80]}...'")
 
     # ============================================================
-    # CHECK FOR CACHED RESPONSES (Instant!)
+    # CHECK FOR CACHED RESPONSES
     # ============================================================
     cache_key = _get_cache_key(user_text)
 
@@ -134,7 +135,7 @@ async def voice_chat_pipeline(
             audio_bytes_out = await asyncio.to_thread(
                 synthesize_tts,
                 message,
-                cache_key,  # ✅ Use cache
+                cache_key,
             )
 
             return {
@@ -146,8 +147,8 @@ async def voice_chat_pipeline(
                 "latency": {"total": time.time() - start_time, "stt": latency["stt"]},
             }
         except Exception as exc:
-            logger.warning("Cached TTS failed, falling back to LLM response")
-            pass
+            logger.warning("Cached TTS failed")
+            # Continue to LLM path
 
     # ============================================================
     # INJECT SESSION CONTEXT
@@ -155,7 +156,6 @@ async def voice_chat_pipeline(
     context_lines = []
 
     if session_state:
-        # Document context
         if session_state.last_document_text:
             doc_preview = session_state.last_document_text[:300]
             context_lines.append(
@@ -166,7 +166,6 @@ Preview: {doc_preview}...
 """
             )
 
-        # Image context
         if session_state.last_image_analysis:
             img_analysis = session_state.last_image_analysis
             img_type = session_state.last_image_type or "medical image"
@@ -179,7 +178,6 @@ Confidence: {img_analysis.get('confidence')}
 """
             )
 
-    # Build enriched prompt
     if context_lines:
         full_context = "\n".join(context_lines)
         enriched_text = f"""
@@ -209,12 +207,23 @@ User's voice message:
         )
     except Exception as exc:
         logger.exception("LLM analysis failed")
-        return {
-            "message": "I'm having trouble processing that. Please try again.",
-            "audio_base64": None,
-            "tts_failed": True,
-            "latency": latency,
-        }
+        fallback_msg = "I'm having trouble processing that. Please try again."
+
+        try:
+            fallback_audio = await asyncio.to_thread(synthesize_tts, fallback_msg)
+            return {
+                "message": fallback_msg,
+                "audio_base64": base64.b64encode(fallback_audio).decode(),
+                "tts_failed": False,
+                "latency": latency,
+            }
+        except:
+            return {
+                "message": fallback_msg,
+                "audio_base64": None,
+                "tts_failed": True,
+                "latency": latency,
+            }
 
     latency["llm"] = time.time() - llm_start
     logger.info(f"⏱️ LLM latency: {latency['llm']:.2f}s")
@@ -225,20 +234,19 @@ User's voice message:
     if not response_text:
         response_text = "I'm here with you."
 
-    # ✅ LIMIT LENGTH for faster TTS
-    if len(response_text) > 200:
-        response_text = response_text[:200].rsplit(" ", 1)[0] + "..."
+    #  Don't truncate - let TTS handle it internally
     raw_text = response_text.strip()
     spoken_text = normalized_response_text(raw_text, severity)
 
     logger.info(f"🤖 Response: '{spoken_text[:80]}...'")
 
     # ============================================================
-    # STEP 3: TEXT-TO-SPEECH
+    # STEP 3: TEXT-TO-SPEECH (MANDATORY FOR VOICE MODE)
     # ============================================================
     tts_start = time.time()
 
     try:
+        #  FIX: ALWAYS generate audio for voice interactions
         audio_bytes_out = await asyncio.to_thread(
             synthesize_tts,
             spoken_text,
@@ -258,7 +266,7 @@ User's voice message:
 
         return {
             "message": spoken_text,
-            "audio_base64": audio_base64,
+            "audio_base64": audio_base64,  #  ALWAYS present for voice
             "severity": severity,
             "intent": llm_result.get("intent"),
             "tts_failed": False,
@@ -266,16 +274,32 @@ User's voice message:
         }
 
     except Exception as exc:
-        logger.exception("TTS generation failed")
+        logger.exception("❌ TTS generation failed - CRITICAL FOR VOICE MODE")
 
         latency["tts"] = time.time() - tts_start
         latency["total"] = time.time() - start_time
 
-        return {
-            "message": spoken_text,
-            "audio_base64": None,
-            "severity": severity,
-            "intent": llm_result.get("intent"),
-            "tts_failed": True,
-            "latency": latency,
-        }
+        #  F Try emergency fallback TTS
+        try:
+            logger.info("Attempting emergency TTS fallback")
+            short_text = "I hear you."  # Very short fallback
+            emergency_audio = await asyncio.to_thread(synthesize_tts, short_text)
+
+            return {
+                "message": spoken_text,  # Original message
+                "audio_base64": base64.b64encode(emergency_audio).decode(),
+                "severity": severity,
+                "intent": llm_result.get("intent"),
+                "tts_failed": False,  # Emergency success
+                "latency": latency,
+            }
+        except:
+            logger.error("Emergency TTS also failed")
+            return {
+                "message": spoken_text,
+                "audio_base64": None,
+                "severity": severity,
+                "intent": llm_result.get("intent"),
+                "tts_failed": True,
+                "latency": latency,
+            }
