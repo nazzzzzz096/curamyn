@@ -849,7 +849,8 @@ async def _on_file_selected(event) -> None:
     )
 
     try:
-        PENDING_FILE_BYTES = await event.file.read()
+        # ❗ IMPORTANT: read() is SYNC in NiceGUI
+        PENDING_FILE_BYTES = event.file.read()
 
         import base64
         import mimetypes
@@ -858,7 +859,6 @@ async def _on_file_selected(event) -> None:
         mime = mime or "image/png"
 
         encoded = base64.b64encode(PENDING_FILE_BYTES).decode()
-
         data_url = f"data:{mime};base64,{encoded}"
 
         msg = {
@@ -875,18 +875,20 @@ async def _on_file_selected(event) -> None:
             with CHAT_CONTAINER:
                 with ui.row().classes("w-full justify-end"):
                     ui.image(data_url).classes(
-                        "max-w-xs rounded-lg " "border border-gray-600"
+                        "max-w-xs rounded-lg border border-gray-600"
                     )
 
         _store_message_js(msg)
-        _scroll_to_bottom()
+
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                _scroll_to_bottom()
 
     except Exception:
         logger.exception("Failed to handle file upload")
-        ui.notify(
-            "Failed to load selected file",
-            type="negative",
-        )
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                ui.notify("Failed to load selected file", type="negative")
         PENDING_FILE_BYTES = None
 
 
@@ -938,7 +940,9 @@ async def _send(input_box) -> None:
 
     except Exception:
         logger.exception("Failed to send file")
-        ui.notify("Failed to send file", type="negative")
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                ui.notify("Failed to send file", type="negative")
 
 
 def _handle_ai_response(response: dict) -> None:
@@ -1029,11 +1033,11 @@ async def _send_text(text: str) -> None:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
-        logger.exception("Failed to send text message")
-        ui.notify(
-            "Failed to send message. Please try again.",
-            type="negative",
-        )
+                logger.exception("Failed to send text message")
+                ui.notify(
+                    "Failed to send message. Please try again.",
+                    type="negative",
+                )
 
 
 async def _send_file() -> None:
