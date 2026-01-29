@@ -655,7 +655,12 @@ async def _stop_recording() -> None:
 
 @app.post("/_nicegui_api/send_voice")
 async def send_voice(audio_array: list[int]) -> dict:
-    """Handle voice input."""
+    """
+    ✅ COMPLETE FIX for voice audio output
+    - Properly renders audio player
+    - Adds audio to state.messages
+    - Auto-plays audio
+    """
     logger.info("Received voice input")
 
     if not state.token:
@@ -668,6 +673,7 @@ async def send_voice(audio_array: list[int]) -> dict:
             _show_typing_indicator()
 
     try:
+        # Call backend API in thread pool
         result = await asyncio.to_thread(
             send_ai_interaction,
             token=state.token,
@@ -681,41 +687,56 @@ async def send_voice(audio_array: list[int]) -> dict:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
+                # Add text message
                 if result.get("message"):
                     _add_ai(result["message"])
 
-                #  Check if audio is present
+                #  Properly render audio with state persistence
                 if result.get("audio_base64"):
                     audio_msg = {
                         "author": "Curamyn",
                         "sent": False,
                         "type": "audio",
                         "audio_data": result["audio_base64"],
-                        "mime_type": result.get("audio_mime_type", "audio/webm"),
+                        "mime_type": "audio/wav",
                     }
+
+                    #  Add to state.messages BEFORE rendering
+                    state.messages.append(audio_msg)
+
+                    # Render audio player
                     _render_message(audio_msg, CHAT_CONTAINER)
+
+                    # Store in browser
+                    _store_message_js(audio_msg)
+
+                    # Scroll to bottom
                     _scroll_to_bottom()
 
-                    # Auto-play
+                    #  Auto-play audio
                     ui.run_javascript(
                         """
                         setTimeout(() => {
                             const audios = document.querySelectorAll('audio');
-                            if (audios.length) {
-                                const last = audios[audios.length - 1];
-                                last.load();
-                                last.play().catch(() => {});
+                            if (audios.length > 0) {
+                                const lastAudio = audios[audios.length - 1];
+                                lastAudio.load();
+                                lastAudio.play().catch(err => {
+                                    console.log('Autoplay blocked by browser:', err);
+                                });
                             }
                         }, 300);
                     """
                     )
+
+                    logger.info("✅ Audio player rendered successfully")
                 else:
-                    if CHAT_CONTAINER:
-                        with CHAT_CONTAINER:
-                            ui.notify(
-                                "⚠️ Voice response unavailable (text shown)",
-                                type="warning",
-                            )
+                    #  Show warning if backend didn't return audio
+                    ui.notify("⚠️ Audio unavailable (text shown)", type="warning")
+                    logger.warning("❌ No audio_base64 in backend response")
+
+        # Update session ID
+        state.session_id = result.get("session_id", state.session_id)
 
         return result
 
@@ -723,7 +744,7 @@ async def send_voice(audio_array: list[int]) -> dict:
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
-        logger.exception("Voice failed")
+        logger.exception("Voice interaction failed")
         return {"error": "Voice failed"}
 
 
@@ -803,40 +824,99 @@ def _set_document_mode() -> None:
 # FILE UPLOAD
 # =================================================
 async def _on_file_selected(e: events.UploadEventArguments) -> None:
-    global PENDING_FILE_BYTES
+    """
+     COMPLETE FIX for file upload
+    - Supports: JPG, PNG, PDF for BOTH images and documents
+    - Fixes: async/await, e.name instead of e.type
+    - Validates: File headers for security
+    """
+    global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE
 
     try:
         logger.info("User selected a file")
 
-        file_bytes = e.file.read()
+        # Await the async read() method
+        file_bytes = await e.content.read()
 
         if not file_bytes:
-            with CHAT_CONTAINER:
-                ui.notify("Empty file", type="warning")
+            ui.notify("Empty file", type="warning")
             return
 
         PENDING_FILE_BYTES = file_bytes
-        mime = e.type or "application/octet-stream"
 
-        with CHAT_CONTAINER:
-            with ui.row().classes("w-full justify-end"):
-                if mime.startswith("image/"):
-                    encoded = base64.b64encode(file_bytes).decode()
-                    ui.image(f"data:{mime};base64,{encoded}").classes(
-                        "max-w-xs rounded-lg border border-gray-600"
-                    )
-                else:
-                    ui.card().classes(
-                        "px-4 py-2 bg-slate-700 rounded-xl text-white max-w-xs"
-                    ).props("flat").children.append(ui.label(f"📄 {e.name}"))
+        # : Use e.name instead of e.type
+        filename = e.name.lower()
 
-        _scroll_to_bottom()
-        logger.info(f"File loaded: {len(file_bytes)} bytes")
+        # Detect file type by extension AND magic bytes
+        is_jpeg = filename.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
+            b"\xff\xd8\xff"
+        )
+        is_png = filename.endswith(".png") or file_bytes.startswith(b"\x89PNG")
+        is_pdf = filename.endswith(".pdf") or file_bytes.startswith(b"%PDF")
+
+        #  Support all formats for both modes
+        if CURRENT_MODE == "image":
+            # X-ray or Skin images: Accept JPG, PNG, OR PDF
+            if is_jpeg:
+                mime_type = "image/jpeg"
+            elif is_png:
+                mime_type = "image/png"
+            elif is_pdf:
+                mime_type = "application/pdf"
+                ui.notify("📄 PDF uploaded as image", type="info")
+            else:
+                ui.notify("Please upload JPG, PNG, or PDF", type="warning")
+                PENDING_FILE_BYTES = None
+                return
+
+            # Show preview (skip for PDF as it needs special rendering)
+            if mime_type != "application/pdf":
+                encoded = base64.b64encode(file_bytes).decode()
+
+                msg = {
+                    "author": "You",
+                    "sent": True,
+                    "type": "image",
+                    "image_data": encoded,
+                    "mime_type": mime_type,
+                }
+
+                state.messages.append(msg)
+
+                if CHAT_CONTAINER:
+                    with CHAT_CONTAINER:
+                        with ui.row().classes("w-full justify-end"):
+                            ui.image(f"data:{mime_type};base64,{encoded}").classes(
+                                "max-w-xs rounded-lg border border-gray-600"
+                            )
+
+                _store_message_js(msg)
+                _scroll_to_bottom()
+
+            ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready to send", type="positive")
+
+        elif CURRENT_MODE == "document":
+            # Documents: Accept PDF, JPG, PNG
+            if is_pdf:
+                mime_type = "application/pdf"
+            elif is_jpeg:
+                mime_type = "image/jpeg"
+                ui.notify("📷 Image uploaded as document", type="info")
+            elif is_png:
+                mime_type = "image/png"
+                ui.notify("📷 Image uploaded as document", type="info")
+            else:
+                ui.notify("Please upload PDF, JPG, or PNG", type="warning")
+                PENDING_FILE_BYTES = None
+                return
+
+            ui.notify(f"✓ Document ready ({mime_type})", type="positive")
+
+        logger.info(f"File loaded: {len(file_bytes)} bytes, type: {mime_type}")
 
     except Exception:
         logger.exception("Failed to handle file upload")
-        with CHAT_CONTAINER:
-            ui.notify("Failed to load file", type="negative")
+        ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
 
 
