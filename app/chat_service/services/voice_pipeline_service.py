@@ -13,6 +13,7 @@ from app.chat_service.services.tts_streamer import synthesize_tts
 from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
+MAX_TTS_CHARS = 220  # Piper-safe limit
 
 
 def _get_cache_key(text: str) -> Optional[str]:
@@ -32,11 +33,7 @@ def _get_cache_key(text: str) -> Optional[str]:
 
 
 def normalized_response_text(text: str, severity: str) -> str:
-    """Normalize response text with appropriate ending."""
     text = text.strip()
-
-    if text.endswith("."):
-        return text
 
     endings = {
         "low": "That makes sense.",
@@ -44,7 +41,28 @@ def normalized_response_text(text: str, severity: str) -> str:
         "high": "You don't have to go through this alone.",
     }
 
+    if text.endswith("."):
+        return text
+
+    #  FORCE dot before severity phrase (test contract)
     return f"{text}. {endings.get(severity, 'I hear you.')}"
+
+
+def normalize_and_prepare_for_tts(text: str, severity: str) -> str:
+    text = normalized_response_text(text, severity)
+    text = sanitize_for_tts(text)
+
+    if len(text) > MAX_TTS_CHARS:
+        text = text[:MAX_TTS_CHARS].rsplit(" ", 1)[0] + "."
+
+    return text
+
+
+def sanitize_for_tts(text: str) -> str:
+    text = text.replace("....", "...")
+    text = text.replace("?.", "?")
+    text = text.replace("!.", "!")
+    return text.strip()
 
 
 async def voice_chat_pipeline(
@@ -53,7 +71,7 @@ async def voice_chat_pipeline(
     session_state=None,
 ) -> dict:
     """
-    FIXED: Voice chat pipeline - ALWAYS returns audio output when successful
+    Voice chat pipeline - ALWAYS returns audio output when successful
     """
     start_time = time.time()
     latency = {}
@@ -236,9 +254,13 @@ User's voice message:
 
     #  Don't truncate - let TTS handle it internally
     raw_text = response_text.strip()
-    spoken_text = normalized_response_text(raw_text, severity)
+    message_text = normalized_response_text(raw_text, severity)
+    tts_text = sanitize_for_tts(message_text)
 
-    logger.info(f"🤖 Response: '{spoken_text[:80]}...'")
+    if len(tts_text) > MAX_TTS_CHARS:
+        tts_text = tts_text[:MAX_TTS_CHARS].rsplit(" ", 1)[0] + "."
+
+    logger.info(f"🤖 Response: '{tts_text[:80]}...'")
 
     # ============================================================
     # STEP 3: TEXT-TO-SPEECH (MANDATORY FOR VOICE MODE)
@@ -249,7 +271,7 @@ User's voice message:
         #  FIX: ALWAYS generate audio for voice interactions
         audio_bytes_out = await asyncio.to_thread(
             synthesize_tts,
-            spoken_text,
+            tts_text,
         )
 
         if not audio_bytes_out or len(audio_bytes_out) == 0:
@@ -265,7 +287,7 @@ User's voice message:
         audio_base64 = base64.b64encode(audio_bytes_out).decode()
 
         return {
-            "message": spoken_text,
+            "message": message_text,
             "audio_base64": audio_base64,  #  ALWAYS present for voice
             "severity": severity,
             "intent": llm_result.get("intent"),
@@ -286,7 +308,7 @@ User's voice message:
             emergency_audio = await asyncio.to_thread(synthesize_tts, short_text)
 
             return {
-                "message": spoken_text,  # Original message
+                "message": message_text,  # Original message
                 "audio_base64": base64.b64encode(emergency_audio).decode(),
                 "severity": severity,
                 "intent": llm_result.get("intent"),
@@ -296,7 +318,7 @@ User's voice message:
         except:
             logger.error("Emergency TTS also failed")
             return {
-                "message": spoken_text,
+                "message": message_text,
                 "audio_base64": None,
                 "severity": severity,
                 "intent": llm_result.get("intent"),

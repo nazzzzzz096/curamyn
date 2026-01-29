@@ -804,6 +804,8 @@ def _set_image_mode(img_type: str) -> None:
         position="top",
         timeout=2000,
     )
+    if UPLOAD_WIDGET:
+        UPLOAD_WIDGET.open()
     logger.debug(f"Switched to IMAGE mode: {img_type}")
 
 
@@ -824,6 +826,8 @@ def _set_document_mode() -> None:
         position="top",
         timeout=2000,
     )
+    if UPLOAD_WIDGET:
+        UPLOAD_WIDGET.open()
     logger.debug("Switched to DOCUMENT mode")
 
 
@@ -861,7 +865,8 @@ async def _on_file_selected(event) -> None:
             "author": "You",
             "sent": True,
             "type": "image",
-            "data": data_url,
+            "image_data": encoded,
+            "mime_type": mime,
         }
 
         state.messages.append(msg)
