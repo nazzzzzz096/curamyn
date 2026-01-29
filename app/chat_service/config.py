@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # --------------------
     RISK_THRESHOLD: float = 0.5
     # stt
-    DEEPGRAM_API_KEY: str
+    DEEPGRAM_API_KEY: Optional[str] = None
     SENTRY_DSN: Optional[str] = None
     # Cross-session memory settings
     SESSION_MEMORY_ENABLED: bool = True
