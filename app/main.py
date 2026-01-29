@@ -3,6 +3,7 @@ Application entry point for Curamyn backend.
 """
 
 import os
+import asyncio
 import mlflow
 from contextlib import asynccontextmanager
 
@@ -43,52 +44,38 @@ os.environ["MLFLOW_TRACKING_URI"] = settings.MLFLOW_TRACKING_URI
 os.environ["MLFLOW_TRACKING_USERNAME"] = settings.DAGSHUB_USERNAME
 os.environ["MLFLOW_TRACKING_PASSWORD"] = settings.DAGSHUB_TOKEN
 
-mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-mlflow.set_experiment("curamyn")
-
-logger.info(
-    "MLflow initialized",
-    extra={
-        "tracking_uri": mlflow.get_tracking_uri(),
-        "user": os.environ.get("MLFLOW_TRACKING_USERNAME"),
-    },
-)
-
 
 # =========================================================
 # Lifespan
 # =========================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Starting application")
+
+    app.state.piper_loaded = False
+    app.state.tts_cache_ready = False
+
+    mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+    mlflow.set_experiment("curamyn")
+
     try:
         load_piper_models_from_s3()
-        logger.info("Piper models loaded at startup")
-    except Exception:
-        logger.exception("Failed to preload Piper models")
+        app.state.piper_loaded = True
+        logger.info("Piper models loaded")
+    except Exception as e:
+        logger.error("Piper model load failed", extra={"error": str(e)})
+
+    async def warm_tts():
+        try:
+            init_tts_cache()
+            app.state.tts_cache_ready = True
+            logger.info("TTS cache ready")
+        except Exception as e:
+            logger.error("TTS cache failed", extra={"error": str(e)})
+
+    asyncio.create_task(asyncio.to_thread(warm_tts))
+
     yield
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for startup/shutdown events.
-
-    This runs before the application starts and after it shuts down.
-    """
-    # ✅ STARTUP
-    print("🚀 Starting application...")
-
-    # Pre-generate TTS cache
-    from app.chat_service.services.tts_streamer import init_tts_cache
-
-    init_tts_cache()
-
-    print("✅ Application startup complete")
-
-    yield  # Application runs here
-
-    # ✅ SHUTDOWN
-    print("🔄 Application shutting down...")
 
 
 # =========================================================
@@ -100,7 +87,17 @@ app = FastAPI(
     version="1.1.0",
 )
 
-
+# =========================================================
+# CORS
+# =========================================================
+app.add_middleware(AuditMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: restrict in prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # =========================================================
 # Rate Limiting (MUST be before CORS)
 # =========================================================
@@ -131,24 +128,10 @@ async def attach_user_to_state(request: Request, call_next):
         try:
             token = auth.split(" ", 1)[1]
             request.state.user = verify_access_token(token)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Invalid access token", extra={"error": str(e)})
 
     return await call_next(request)
-
-
-# =========================================================
-# CORS
-# =========================================================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # TODO: restrict in prod
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.add_middleware(AuditMiddleware)
 
 
 # =========================================================
@@ -196,9 +179,13 @@ logger.info(
 # =========================================================
 # Health
 # =========================================================
-@app.get("/health", tags=["health"])
-def health_check() -> dict:
-    return {"status": "ok"}
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "piper_loaded": getattr(app.state, "piper_loaded", False),
+        "tts_cache_ready": getattr(app.state, "tts_cache_ready", False),
+    }
 
 
 # Initialize Sentry

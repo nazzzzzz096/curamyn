@@ -7,11 +7,11 @@ file uploads, consent management, memory actions, and logout.
 ENHANCED with typing indicators and loading states.
 """
 
-from typing import Dict, Any, List
-from nicegui import ui, app
+from nicegui import ui, app, events
 import asyncio
 from fastapi import Request
 import json
+import base64
 from frontend.state.app_state import state
 from frontend.api.upload_client import send_ai_interaction
 from frontend.api.consent_client import update_consent
@@ -504,19 +504,15 @@ def _render_consent_menu():
 # INPUT BAR
 # =================================================
 def _render_input_bar() -> None:
-    """
-    Input bar with explicit button - prevents accidental menu opening
-    """
+    """Input bar with proper file upload handling."""
     global UPLOAD_WIDGET
-
-    logger.debug("Rendering chat input bar with fixed UI")
 
     with ui.element("div").classes(
         "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
     ):
         with ui.row().classes("w-full px-4 items-center gap-2"):
 
-            # ---------- INPUT TYPE MENU (EXPLICIT BUTTON) ----------
+            # Mode menu
             with ui.menu() as type_menu:
                 ui.menu_item("💬 Text", on_click=_set_text_mode)
                 ui.separator()
@@ -524,68 +520,45 @@ def _render_input_bar() -> None:
                 ui.menu_item("🔬 Skin Image", on_click=lambda: _set_image_mode("skin"))
                 ui.menu_item("📄 Medical Document", on_click=_set_document_mode)
 
-            #  Use icon button with explicit click handler - prevents touch/hover activation
-            ui.button(
-                icon="add_circle",
-                on_click=type_menu.open,  # Only opens on explicit click
-            ).props(
-                "flat round"  # No hover effects
-            ).classes(
-                "text-slate-400 hover:text-emerald-400"
-            ).tooltip(
-                "Change Input Type (Click)"
+            ui.button(icon="add_circle", on_click=type_menu.open).props(
+                "flat round"
+            ).classes("text-slate-400 hover:text-emerald-400").tooltip(
+                "Change Input Type"
             )
 
-            # ---------- FILE UPLOAD (HIDDEN) ----------
+            #  File upload with proper async handling
             UPLOAD_WIDGET = (
                 ui.upload(
                     auto_upload=True,
-                    on_upload=_on_file_selected,
+                    on_upload=_on_file_selected,  #  This will be async
                 )
                 .props('accept="*"')
                 .classes("hidden")
                 .props('id="hidden-upload"')
             )
 
-            # ---------- TEXT INPUT ----------
+            # Text input
             input_box = (
                 ui.input(placeholder="Type your message...")
                 .props("outlined dense dark")
                 .classes("flex-1 bg-slate-800/50 rounded-xl border-slate-700")
             )
+            input_box.on("keydown.enter", lambda: asyncio.create_task(_send(input_box)))
 
-            #  Enter key handler
-            input_box.on(
-                "keydown.enter", lambda e: asyncio.create_task(_send(input_box))
-            )
-
-            # ---------- SEND BUTTON ----------
+            # Send button
             ui.button(
                 icon="send",
                 on_click=lambda: asyncio.create_task(_send(input_box)),
-            ).props("round color=emerald").classes(
-                "shadow-lg hover:shadow-emerald-500/50"
-            ).tooltip(
-                "Send Message"
-            )
+            ).props("round color=emerald").tooltip("Send Message")
 
-            # ---------- VOICE CONTROLS ----------
+            # Voice controls
             with ui.row().classes("gap-1"):
-                ui.button(
-                    icon="mic",
-                    on_click=_start_recording,
-                ).props(
+                ui.button(icon="mic", on_click=_start_recording).props(
                     "flat round"
-                ).classes("text-slate-400 hover:text-red-400").tooltip(
-                    "Start Recording"
-                )
-
-                ui.button(
-                    icon="stop",
-                    on_click=_stop_recording,
-                ).props(
+                ).tooltip("Start Recording")
+                ui.button(icon="stop", on_click=_stop_recording).props(
                     "flat round"
-                ).classes("text-slate-400 hover:text-red-500").tooltip("Stop Recording")
+                ).tooltip("Stop Recording")
 
 
 def _start_recording() -> None:
@@ -691,16 +664,8 @@ async def _stop_recording() -> None:
 
 @app.post("/_nicegui_api/send_voice")
 async def send_voice(audio_array: list[int]) -> dict:
-    """
-    Receive recorded audio from the browser and send it to the AI backend.
-
-    Args:
-        audio_array: List of audio byte values from the browser.
-
-    Returns:
-        Backend AI response payload.
-    """
-    logger.info("Received voice input from browser")
+    """Handle voice input."""
+    logger.info("Received voice input")
 
     if not state.token:
         return {"error": "Not authenticated"}
@@ -725,10 +690,10 @@ async def send_voice(audio_array: list[int]) -> dict:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
-                #  Always show AI text
                 if result.get("message"):
                     _add_ai(result["message"])
 
+                #  Check if audio is present
                 if result.get("audio_base64"):
                     audio_msg = {
                         "author": "Curamyn",
@@ -740,31 +705,35 @@ async def send_voice(audio_array: list[int]) -> dict:
                     _render_message(audio_msg, CHAT_CONTAINER)
                     _scroll_to_bottom()
 
-                    #  AUTO-PLAY THE LAST CHAT AUDIO
+                    # Auto-play
                     ui.run_javascript(
                         """
-                    setTimeout(() => {
-                        const audios = document.querySelectorAll('audio');
-                        if (!audios.length) return;
-
-                        const last = audios[audios.length - 1];
-                        last.load();
-                        last.play().catch(() => {});
-                    }, 300);
+                        setTimeout(() => {
+                            const audios = document.querySelectorAll('audio');
+                            if (audios.length) {
+                                const last = audios[audios.length - 1];
+                                last.load();
+                                last.play().catch(() => {});
+                            }
+                        }, 300);
                     """
                     )
+                else:
+                    if CHAT_CONTAINER:
+                        with CHAT_CONTAINER:
+                            ui.notify(
+                                "⚠️ Voice response unavailable (text shown)",
+                                type="warning",
+                            )
 
         return result
 
     except Exception:
-        logger.exception("Voice interaction failed")
-
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
-                ui.notify("Voice playback failed", type="negative")
-
-        return {"error": "Voice playback failed"}
+        logger.exception("Voice failed")
+        return {"error": "Voice failed"}
 
 
 # =================================================
@@ -773,24 +742,22 @@ async def send_voice(audio_array: list[int]) -> dict:
 
 
 def _set_text_mode() -> None:
-    """Switch to text mode and update label."""
+    """Switch to text mode."""
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, PENDING_FILE_BYTES, MODE_LABEL
 
     CURRENT_MODE = "text"
     CURRENT_IMAGE_TYPE = None
     PENDING_FILE_BYTES = None
 
-    # Update the label
     if MODE_LABEL:
         MODE_LABEL.set_text("📝 Current mode: TEXT")
-
-    ui.notify("✓ Text mode", type="info", position="top", timeout=1000)
-    logger.debug("Switched to TEXT mode")
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            ui.notify("✓ Text mode", type="info", position="top", timeout=1000)
 
 
 def _set_image_mode(img_type: str) -> None:
-    """Switch to image mode and update label."""
-
+    """Switch to image mode and trigger file browser."""
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "image"
@@ -798,8 +765,6 @@ def _set_image_mode(img_type: str) -> None:
 
     if MODE_LABEL:
         MODE_LABEL.set_text(f"🖼️ Current mode: {img_type.upper()} IMAGE")
-
-    #  ALWAYS bind notify to a slot
     if CHAT_CONTAINER:
         with CHAT_CONTAINER:
             ui.notify(
@@ -808,7 +773,7 @@ def _set_image_mode(img_type: str) -> None:
                 timeout=1500,
             )
 
-    # Trigger the hidden upload input
+    #  Trigger the hidden file input correctly
     ui.run_javascript(
         """
         const input = document.querySelector('#hidden-upload input[type="file"]');
@@ -816,67 +781,63 @@ def _set_image_mode(img_type: str) -> None:
     """
     )
 
-    logger.debug(f"Switched to IMAGE mode: {img_type}")
-
 
 def _set_document_mode() -> None:
-    """Switch to document mode and update label."""
+    """✅ FIXED: Switch to document mode and trigger file browser."""
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "document"
     CURRENT_IMAGE_TYPE = "document"
 
-    #  Update the label
     if MODE_LABEL:
         MODE_LABEL.set_text("📄 Current mode: DOCUMENT")
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            ui.notify(
+                "✓ Document mode - choose a file",
+                type="info",
+                timeout=1500,
+            )
 
-    ui.notify(
-        "✓ Document mode - upload your report",
-        type="info",
-        position="top",
-        timeout=2000,
+    # ✅ FIX #3: Trigger file browser (don't call .open())
+    ui.run_javascript(
+        """
+        const input = document.querySelector('#hidden-upload input[type="file"]');
+        if (input) input.click();
+    """
     )
-    if UPLOAD_WIDGET:
-        UPLOAD_WIDGET.open()
-    logger.debug("Switched to DOCUMENT mode")
 
 
 # =================================================
 # FILE UPLOAD
 # =================================================
-async def _on_file_selected(event) -> None:
-    """
-    Handle file selection from the upload widget.
-
-    Reads the file, renders a preview in the chat UI,
-    and stores it as a pending message.
-    """
+async def _on_file_selected(e: events.UploadEventArguments) -> None:
+    """Proper async file reading."""
     global PENDING_FILE_BYTES
 
-    logger.info(
-        "User selected a file",
-        extra={"uploaded_filename": event.file.name},
-    )
-
     try:
-        # ❗ IMPORTANT: read() is SYNC in NiceGUI
-        PENDING_FILE_BYTES = event.file.read()
+        logger.info("User selected a file")
 
-        import base64
-        import mimetypes
+        #  Await the async read() method
+        file_bytes = await e.content.read()
 
-        mime, _ = mimetypes.guess_type(event.file.name)
-        mime = mime or "image/png"
+        if not file_bytes:
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify("Empty file", type="warning")
+                    return
 
-        encoded = base64.b64encode(PENDING_FILE_BYTES).decode()
-        data_url = f"data:{mime};base64,{encoded}"
+        PENDING_FILE_BYTES = file_bytes
+
+        # Show preview
+        encoded = base64.b64encode(file_bytes).decode()
 
         msg = {
             "author": "You",
             "sent": True,
             "type": "image",
             "image_data": encoded,
-            "mime_type": mime,
+            "mime_type": e.type or "image/png",
         }
 
         state.messages.append(msg)
@@ -884,21 +845,20 @@ async def _on_file_selected(event) -> None:
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 with ui.row().classes("w-full justify-end"):
-                    ui.image(data_url).classes(
+                    ui.image(f"data:{e.type};base64,{encoded}").classes(
                         "max-w-xs rounded-lg border border-gray-600"
                     )
 
         _store_message_js(msg)
+        _scroll_to_bottom()
 
-        if CHAT_CONTAINER:
-            with CHAT_CONTAINER:
-                _scroll_to_bottom()
+        logger.info(f"File loaded: {len(file_bytes)} bytes")
 
     except Exception:
         logger.exception("Failed to handle file upload")
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
-                ui.notify("Failed to load selected file", type="negative")
+                ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
 
 
@@ -906,16 +866,12 @@ async def _on_file_selected(event) -> None:
 # SEND
 # =================================================
 async def _send(input_box) -> None:
-    """Send message and auto-reset mode."""
+    """Send with proper slot context."""
     global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
-
-    logger.debug(f"Sending message in {CURRENT_MODE} mode")
 
     if CURRENT_MODE == "text":
         text = input_box.value.strip()
-
         if not text:
-            logger.debug("Empty text input ignored")
             return
 
         input_box.value = ""
@@ -924,29 +880,29 @@ async def _send(input_box) -> None:
         try:
             await _send_text(text)
         except Exception:
-            logger.exception("Failed to send text message")
-            ui.notify("Failed to send message", type="negative")
-
+            logger.exception("Failed to send text")
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify("Failed to send message", type="negative")
         return
 
-    # ---------- FILE MODE ----------
+    # File mode
     if not PENDING_FILE_BYTES:
-        ui.notify("Select a file first", type="warning")
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                ui.notify("Select a file first", type="warning")
         return
 
     try:
         await _send_file()
 
-        #  Auto-reset to TEXT mode
+        # Auto-reset
         CURRENT_MODE = "text"
         CURRENT_IMAGE_TYPE = None
         PENDING_FILE_BYTES = None
 
-        #  Update label
         if MODE_LABEL:
             MODE_LABEL.set_text("📝 Current mode: TEXT")
-
-        logger.info("Auto-reset to TEXT mode after file upload")
 
     except Exception:
         logger.exception("Failed to send file")
@@ -983,18 +939,14 @@ def _handle_ai_response(response: dict) -> None:
 
 
 async def _send_text(text: str) -> None:
-    """
-    Send a text message to the AI backend and render the response.
-
-    Args:
-        text: User input text.
-    """
+    """Text sending with proper async context."""
     logger.info("Sending text message")
 
     if not state.token:
-        logger.warning("Attempted to send text without authentication")
-        ui.notify("You are not authenticated", type="negative")
-        return
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                ui.notify("Not authenticated", type="negative")
+                return
 
     # Show typing indicator
     if CHAT_CONTAINER:
@@ -1002,6 +954,7 @@ async def _send_text(text: str) -> None:
             _show_typing_indicator()
 
     try:
+        #  API call in thread (no UI operations)
         response = await asyncio.to_thread(
             send_ai_interaction,
             token=state.token,
@@ -1011,43 +964,24 @@ async def _send_text(text: str) -> None:
             response_mode="text",
         )
 
-        # Hide typing indicator before showing response
+        #  UI operations INSIDE slot context
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
 
-        if CHAT_CONTAINER:
-            with CHAT_CONTAINER:
-                _handle_ai_response(response)
-
-        state.session_id = response.get(
-            "session_id",
-            state.session_id,
-        )
-
-        if state.session_id:
-            ui.run_javascript(
-                f"""
-                sessionStorage.setItem('session_id', '{state.session_id}');
-                """
-            )
-
-        message = response.get("message")
-        if message:
-            if CHAT_CONTAINER:
-                with CHAT_CONTAINER:
+                message = response.get("message")
+                if message:
                     _add_ai(message)
+
+        # Update session ID
+        state.session_id = response.get("session_id", state.session_id)
 
     except Exception:
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
-
-                logger.exception("Failed to send text message")
-                ui.notify(
-                    "Failed to send message. Please try again.",
-                    type="negative",
-                )
+        logger.exception("Failed to send text")
+        raise
 
 
 async def _send_file() -> None:
@@ -1064,16 +998,20 @@ async def _send_file() -> None:
 
     if not state.token:
         logger.warning("Attempted to send file without authentication")
-        ui.notify("You are not authenticated", type="negative")
-        return
+        if CHAT_CONTAINER:
+            with CHAT_CONTAINER:
+                ui.notify("You are not authenticated", type="negative")
+                return
 
     # CHECK CONSENT BEFORE SENDING
     if CURRENT_IMAGE_TYPE == "document":
         if not state.consent.get("document", False):
-            ui.notify(
-                "Document processing is disabled. Enable it in consent settings.",
-                type="warning",
-            )
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify(
+                        "Document processing is disabled. Enable it in consent settings.",
+                        type="warning",
+                    )
             PENDING_FILE_BYTES = None
             if UPLOAD_WIDGET:
                 UPLOAD_WIDGET.reset()
@@ -1081,10 +1019,12 @@ async def _send_file() -> None:
     else:
         # For images (xray, skin)
         if not state.consent.get("image", False):
-            ui.notify(
-                "Image processing is disabled. Enable it in consent settings.",
-                type="warning",
-            )
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify(
+                        "Image processing is disabled. Enable it in consent settings.",
+                        type="warning",
+                    )
             PENDING_FILE_BYTES = None
             if UPLOAD_WIDGET:
                 UPLOAD_WIDGET.reset()
@@ -1114,8 +1054,10 @@ async def _send_file() -> None:
         if response.get("message"):
             msg_lower = response.get("message", "").lower()
             if "consent" in msg_lower or "disabled" in msg_lower:
-                ui.notify(response.get("message"), type="warning")
-                return
+                if CHAT_CONTAINER:
+                    with CHAT_CONTAINER:
+                        ui.notify(response.get("message"), type="warning")
+                        return
 
         # Handle AI response
         if CHAT_CONTAINER:
@@ -1157,15 +1099,19 @@ async def _send_file() -> None:
         # Check if it's a consent-related error
         error_msg = str(e)
         if "consent" in error_msg.lower() or "disabled" in error_msg.lower():
-            ui.notify(
-                "Image/document processing is disabled. Enable it in consent settings.",
-                type="warning",
-            )
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify(
+                        "Image/document processing is disabled. Enable it in consent settings.",
+                        type="warning",
+                    )
         else:
-            ui.notify(
-                "Failed to send file. Please try again.",
-                type="negative",
-            )
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.notify(
+                        "Failed to send file. Please try again.",
+                        type="negative",
+                    )
 
     finally:
         PENDING_FILE_BYTES = None
