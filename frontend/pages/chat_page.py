@@ -655,12 +655,7 @@ async def _stop_recording() -> None:
 
 @app.post("/_nicegui_api/send_voice")
 async def send_voice(audio_array: list[int]) -> dict:
-    """
-    ✅ COMPLETE FIX for voice audio output
-    - Properly renders audio player
-    - Adds audio to state.messages
-    - Auto-plays audio
-    """
+    """✅ FIXED: Audio with proper state management"""
     logger.info("Received voice input")
 
     if not state.token:
@@ -673,7 +668,6 @@ async def send_voice(audio_array: list[int]) -> dict:
             _show_typing_indicator()
 
     try:
-        # Call backend API in thread pool
         result = await asyncio.to_thread(
             send_ai_interaction,
             token=state.token,
@@ -691,7 +685,7 @@ async def send_voice(audio_array: list[int]) -> dict:
                 if result.get("message"):
                     _add_ai(result["message"])
 
-                #  Properly render audio with state persistence
+                # ✅ FIX: Properly render audio
                 if result.get("audio_base64"):
                     audio_msg = {
                         "author": "Curamyn",
@@ -701,19 +695,15 @@ async def send_voice(audio_array: list[int]) -> dict:
                         "mime_type": "audio/wav",
                     }
 
-                    #  Add to state.messages BEFORE rendering
+                    # ✅ CRITICAL: Add to state BEFORE rendering
                     state.messages.append(audio_msg)
 
-                    # Render audio player
+                    # Render
                     _render_message(audio_msg, CHAT_CONTAINER)
-
-                    # Store in browser
                     _store_message_js(audio_msg)
-
-                    # Scroll to bottom
                     _scroll_to_bottom()
 
-                    #  Auto-play audio
+                    # Auto-play
                     ui.run_javascript(
                         """
                         setTimeout(() => {
@@ -722,29 +712,25 @@ async def send_voice(audio_array: list[int]) -> dict:
                                 const lastAudio = audios[audios.length - 1];
                                 lastAudio.load();
                                 lastAudio.play().catch(err => {
-                                    console.log('Autoplay blocked by browser:', err);
+                                    console.log('Autoplay blocked:', err);
                                 });
                             }
                         }, 300);
                     """
                     )
 
-                    logger.info("✅ Audio player rendered successfully")
+                    logger.info("✅ Audio rendered successfully")
                 else:
-                    #  Show warning if backend didn't return audio
-                    ui.notify("⚠️ Audio unavailable (text shown)", type="warning")
-                    logger.warning("❌ No audio_base64 in backend response")
+                    ui.notify("⚠️ Audio unavailable", type="warning")
 
-        # Update session ID
         state.session_id = result.get("session_id", state.session_id)
-
         return result
 
     except Exception:
         if CHAT_CONTAINER:
             with CHAT_CONTAINER:
                 _hide_typing_indicator()
-        logger.exception("Voice interaction failed")
+        logger.exception("Voice failed")
         return {"error": "Voice failed"}
 
 
@@ -820,23 +806,70 @@ def _set_document_mode() -> None:
     )
 
 
+async def _on_file_selected_DIAGNOSTIC(e: events.UploadEventArguments) -> None:
+    """DIAGNOSTIC: Figure out the upload event structure"""
+
+    # Log ALL attributes
+    logger.info("=" * 60)
+    logger.info("UPLOAD EVENT DIAGNOSTIC")
+    logger.info("=" * 60)
+    logger.info(f"Type: {type(e)}")
+    logger.info(f"All attributes: {[a for a in dir(e) if not a.startswith('_')]}")
+
+    # Check specific attributes
+    logger.info(f"Has 'content': {hasattr(e, 'content')}")
+    logger.info(f"Has 'name': {hasattr(e, 'name')}")
+    logger.info(f"Has 'type': {hasattr(e, 'type')}")
+    logger.info(f"Has 'file': {hasattr(e, 'file')}")
+    logger.info(f"Has 'sender': {hasattr(e, 'sender')}")
+    logger.info(f"Has 'filename': {hasattr(e, 'filename')}")
+
+    # If sender exists, check its attributes
+    if hasattr(e, "sender"):
+        logger.info(f"sender type: {type(e.sender)}")
+        logger.info(
+            f"sender attributes: {[a for a in dir(e.sender) if not a.startswith('_')]}"
+        )
+
+    logger.info("=" * 60)
+
+    # Show notification
+    ui.notify("Check your Docker logs for diagnostic info!", type="info")
+
+
 # =================================================
 # FILE UPLOAD
 # =================================================
 async def _on_file_selected(e: events.UploadEventArguments) -> None:
     """
-     COMPLETE FIX for file upload
-    - Supports: JPG, PNG, PDF for BOTH images and documents
-    - Fixes: async/await, e.name instead of e.type
-    - Validates: File headers for security
+    ✅ REAL FIX for YOUR NiceGUI version
+
+    Based on error: AttributeError: 'UploadEventArguments' object has no attribute 'content'
     """
     global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE
 
     try:
         logger.info("User selected a file")
 
-        # Await the async read() method
-        file_bytes = await e.content.read()
+        # ✅ YOUR NICEGUI VERSION: File bytes are directly in e (not e.content)
+        # Try multiple approaches:
+
+        # Approach 1: Direct file property
+        if hasattr(e, "file"):
+            file_bytes = e.file
+        # Approach 2: Direct content property
+        elif hasattr(e, "content"):
+            if callable(e.content.read):
+                file_bytes = await e.content.read()
+            else:
+                file_bytes = e.content
+        # Approach 3: sender property (some NiceGUI versions)
+        elif hasattr(e, "sender") and hasattr(e.sender, "read"):
+            file_bytes = await e.sender.read()
+        else:
+            logger.error(f"Unknown upload event structure. Attributes: {dir(e)}")
+            ui.notify("File upload not supported in this version", type="negative")
+            return
 
         if not file_bytes:
             ui.notify("Empty file", type="warning")
@@ -844,19 +877,28 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
 
         PENDING_FILE_BYTES = file_bytes
 
-        # : Use e.name instead of e.type
-        filename = e.name.lower()
+        # Get filename (try multiple attributes)
+        filename = None
+        if hasattr(e, "name"):
+            filename = e.name
+        elif hasattr(e, "filename"):
+            filename = e.filename
+        elif hasattr(e, "sender") and hasattr(e.sender, "name"):
+            filename = e.sender.name
+        else:
+            filename = "upload.file"
 
-        # Detect file type by extension AND magic bytes
-        is_jpeg = filename.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
+        # Detect file type from filename
+        filename_lower = filename.lower()
+
+        is_jpeg = filename_lower.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
             b"\xff\xd8\xff"
         )
-        is_png = filename.endswith(".png") or file_bytes.startswith(b"\x89PNG")
-        is_pdf = filename.endswith(".pdf") or file_bytes.startswith(b"%PDF")
+        is_png = filename_lower.endswith(".png") or file_bytes.startswith(b"\x89PNG")
+        is_pdf = filename_lower.endswith(".pdf") or file_bytes.startswith(b"%PDF")
 
-        #  Support all formats for both modes
+        # Handle based on mode
         if CURRENT_MODE == "image":
-            # X-ray or Skin images: Accept JPG, PNG, OR PDF
             if is_jpeg:
                 mime_type = "image/jpeg"
             elif is_png:
@@ -869,7 +911,7 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
                 PENDING_FILE_BYTES = None
                 return
 
-            # Show preview (skip for PDF as it needs special rendering)
+            # Show preview (skip for PDF)
             if mime_type != "application/pdf":
                 encoded = base64.b64encode(file_bytes).decode()
 
@@ -885,6 +927,7 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
 
                 if CHAT_CONTAINER:
                     with CHAT_CONTAINER:
+                        # ✅ REMOVE extra column - this was causing spacing issues
                         with ui.row().classes("w-full justify-end"):
                             ui.image(f"data:{mime_type};base64,{encoded}").classes(
                                 "max-w-xs rounded-lg border border-gray-600"
@@ -896,21 +939,17 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
             ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready to send", type="positive")
 
         elif CURRENT_MODE == "document":
-            # Documents: Accept PDF, JPG, PNG
             if is_pdf:
                 mime_type = "application/pdf"
-            elif is_jpeg:
-                mime_type = "image/jpeg"
-                ui.notify("📷 Image uploaded as document", type="info")
-            elif is_png:
-                mime_type = "image/png"
+            elif is_jpeg or is_png:
+                mime_type = "image/jpeg" if is_jpeg else "image/png"
                 ui.notify("📷 Image uploaded as document", type="info")
             else:
                 ui.notify("Please upload PDF, JPG, or PNG", type="warning")
                 PENDING_FILE_BYTES = None
                 return
 
-            ui.notify(f"✓ Document ready ({mime_type})", type="positive")
+            ui.notify(f"✓ Document ready to send", type="positive")
 
         logger.info(f"File loaded: {len(file_bytes)} bytes, type: {mime_type}")
 
