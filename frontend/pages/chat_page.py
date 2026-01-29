@@ -599,6 +599,7 @@ def _start_recording() -> None:
         """
     )
 
+
 async def _stop_recording() -> None:
     """
     Stop audio recording and send the captured audio
