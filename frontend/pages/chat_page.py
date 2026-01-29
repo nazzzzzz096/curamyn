@@ -542,8 +542,9 @@ def _render_input_bar() -> None:
                     auto_upload=True,
                     on_upload=_on_file_selected,
                 )
-                .props("accept=*/*")
+                .props('accept="*"')
                 .classes("hidden")
+                .props('id="hidden-upload"')
             )
 
             # ---------- TEXT INPUT ----------
@@ -788,24 +789,33 @@ def _set_text_mode() -> None:
 
 
 def _set_image_mode(img_type: str) -> None:
-    """CORRECTED: Switch to image mode and update label."""
+    """Switch to image mode and update label."""
+
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "image"
     CURRENT_IMAGE_TYPE = img_type
 
-    #  Update the label
     if MODE_LABEL:
         MODE_LABEL.set_text(f"🖼️ Current mode: {img_type.upper()} IMAGE")
 
-    ui.notify(
-        f"✓ {img_type.upper()} image mode - upload your image",
-        type="info",
-        position="top",
-        timeout=2000,
+    #  ALWAYS bind notify to a slot
+    if CHAT_CONTAINER:
+        with CHAT_CONTAINER:
+            ui.notify(
+                f"✓ {img_type.upper()} image mode - choose a file",
+                type="info",
+                timeout=1500,
+            )
+
+    # Trigger the hidden upload input
+    ui.run_javascript(
+        """
+        const input = document.querySelector('#hidden-upload input[type="file"]');
+        if (input) input.click();
+    """
     )
-    if UPLOAD_WIDGET:
-        UPLOAD_WIDGET.open()
+
     logger.debug(f"Switched to IMAGE mode: {img_type}")
 
 
