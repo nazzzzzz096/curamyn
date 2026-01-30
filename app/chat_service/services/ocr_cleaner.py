@@ -34,6 +34,7 @@ def clean_ocr_text(text: str) -> str:
     Returns:
         str: Privacy-safe cleaned text.
     """
+    raise RuntimeError("🔥 WRONG clean_ocr_text IS BEING CALLED 🔥")
     if not text:
         return ""
 

@@ -103,7 +103,7 @@ def send_ai_interaction(
             headers=headers,
             data=data,  # multipart-safe
             files=files or None,  # only include if present
-            timeout=60,
+            timeout=200,
         )
         response.raise_for_status()
         return response.json()

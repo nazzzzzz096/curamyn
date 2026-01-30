@@ -15,9 +15,17 @@ logger = get_logger(__name__)
 _analyzer = None
 _anonymizer = None
 
+import os
+
+PII_ENABLED = os.getenv("ENABLE_PII", "false").lower() == "true"
+logger.info("PII detection enabled" if PII_ENABLED else "PII detection disabled")
+
 
 def get_pii_analyzer() -> AnalyzerEngine:
     """Get or create PII analyzer instance."""
+    if not PII_ENABLED:
+        raise RuntimeError("PII detection is disabled")
+
     global _analyzer
 
     if _analyzer is None:
@@ -50,6 +58,8 @@ def detect_pii(text: str) -> List[Dict[str, Any]]:
     Returns:
         List of detected PII entities with type, location, and confidence
     """
+    if not PII_ENABLED or not text or len(text) < 3:
+        return []
     if not text or len(text) < 3:
         return []
 
@@ -109,6 +119,8 @@ def redact_pii(text: str, replacement: str = "[REDACTED]") -> str:
     Returns:
         Text with PII redacted
     """
+    if not PII_ENABLED or not text or len(text) < 3:
+        return []
     if not text or len(text) < 3:
         return text
 

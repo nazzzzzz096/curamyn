@@ -804,99 +804,65 @@ def _set_document_mode() -> None:
     )
 
 
-async def _on_file_selected_DIAGNOSTIC(e: events.UploadEventArguments) -> None:
-    """DIAGNOSTIC: Figure out the upload event structure"""
-
-    # Log ALL attributes
-    logger.info("=" * 60)
-    logger.info("UPLOAD EVENT DIAGNOSTIC")
-    logger.info("=" * 60)
-    logger.info(f"Type: {type(e)}")
-    logger.info(f"All attributes: {[a for a in dir(e) if not a.startswith('_')]}")
-
-    # Check specific attributes
-    logger.info(f"Has 'content': {hasattr(e, 'content')}")
-    logger.info(f"Has 'name': {hasattr(e, 'name')}")
-    logger.info(f"Has 'type': {hasattr(e, 'type')}")
-    logger.info(f"Has 'file': {hasattr(e, 'file')}")
-    logger.info(f"Has 'sender': {hasattr(e, 'sender')}")
-    logger.info(f"Has 'filename': {hasattr(e, 'filename')}")
-
-    # If sender exists, check its attributes
-    if hasattr(e, "sender"):
-        logger.info(f"sender type: {type(e.sender)}")
-        logger.info(
-            f"sender attributes: {[a for a in dir(e.sender) if not a.startswith('_')]}"
-        )
-
-    logger.info("=" * 60)
-
-    # Show notification
-    ui.notify("Check your Docker logs for diagnostic info!", type="info")
-
-
 # =================================================
 # FILE UPLOAD
 # =================================================
-async def _on_file_selected(e: events.UploadEventArguments) -> None:
-    """✅ WORKS WITH YOUR NICEGUI VERSION"""
+from pathlib import Path
+from nicegui.events import UploadEventArguments
+
+
+async def _on_file_selected(e: UploadEventArguments) -> None:
+    """Robust upload handler (Small + Large files)"""
     global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE
 
     try:
         logger.info("User selected a file")
 
-        # ✅ FIX: Your NiceGUI version stores content differently
-        # Try multiple approaches for compatibility
         file_bytes = None
+        filename = getattr(e, "name", "upload.file")
 
-        # Method 1: Direct content (NiceGUI 1.x)
-        if hasattr(e, "content") and hasattr(e.content, "read"):
-            file_bytes = await e.content.read()
-        # Method 2: Direct content bytes (older versions)
-        elif hasattr(e, "content") and isinstance(e.content, bytes):
-            file_bytes = e.content
-        # Method 3: Sender attribute (some versions)
-        elif hasattr(e, "sender"):
-            upload_widget = e.sender
-            if hasattr(upload_widget, "content"):
-                file_bytes = upload_widget.content
-        else:
-            # ✅ DIAGNOSTIC: Log what's actually available
-            logger.error(
-                f"Unknown upload structure. Available: {[a for a in dir(e) if not a.startswith('_')]}"
-            )
-            ui.notify("File upload not supported - check logs", type="negative")
-            return
+        # ✅ CASE 1: SmallFileUpload (most common)
+        if hasattr(e.file, "read"):
+            file_bytes = await e.file.read()
 
-        if not file_bytes or len(file_bytes) == 0:
+        # ✅ CASE 2: LargeFileUpload (saved to disk)
+        elif hasattr(e.file, "path"):
+            file_path = Path(e.file.path)
+            if file_path.exists():
+                file_bytes = file_path.read_bytes()
+
+        if not file_bytes:
             ui.notify("Empty file", type="warning")
+            logger.error("File bytes are empty")
             return
 
         PENDING_FILE_BYTES = file_bytes
-        filename = e.name if hasattr(e, "name") else "upload.file"
         filename_lower = filename.lower()
 
-        # ✅ NOW safe to check file type
-        is_jpeg = filename_lower.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
-            b"\xff\xd8\xff"
-        )
-        is_png = filename_lower.endswith(".png") or file_bytes.startswith(b"\x89PNG")
-        is_pdf = filename_lower.endswith(".pdf") or file_bytes.startswith(b"%PDF")
+        # ---------- FILE TYPE DETECTION ----------
+        is_jpeg = file_bytes.startswith(b"\xff\xd8\xff")
+        is_png = file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        is_webp = file_bytes[0:4] == b"RIFF" and b"WEBP" in file_bytes[8:16]
+        is_avif = file_bytes[4:8] == b"ftyp" and b"avif" in file_bytes[8:16]
+        is_pdf = file_bytes.startswith(b"%PDF")
 
-        # Rest of your code...
         if CURRENT_MODE == "image":
             if is_jpeg:
                 mime_type = "image/jpeg"
             elif is_png:
                 mime_type = "image/png"
+            elif is_webp:
+                mime_type = "image/webp"
+            elif is_avif:
+                mime_type = "image/avif"
             elif is_pdf:
                 mime_type = "application/pdf"
             else:
-                ui.notify("Please upload JPG, PNG, or PDF", type="warning")
+                ui.notify("Allowed formats: JPG, PNG, WEBP, AVIF, PDF", type="warning")
                 PENDING_FILE_BYTES = None
                 return
 
-            # Show preview
+            # ---------- IMAGE PREVIEW ----------
             if mime_type != "application/pdf":
                 encoded = base64.b64encode(file_bytes).decode()
                 msg = {
@@ -914,20 +880,45 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
                             ui.image(f"data:{mime_type};base64,{encoded}").classes(
                                 "max-w-xs rounded-lg border border-gray-600"
                             )
+
+                        _scroll_to_bottom()
+
                 _store_message_js(msg)
-                _scroll_to_bottom()
 
             ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready", type="positive")
 
         elif CURRENT_MODE == "document":
+            msg = {
+                "author": "You",
+                "sent": True,
+                "type": "document",
+                "filename": filename,
+                "size": len(file_bytes),
+            }
+
+            state.messages.append(msg)
+
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    with ui.row().classes("w-full justify-end"):
+                        with ui.card().classes(
+                            "bg-slate-800 border border-slate-600 px-4 py-3 rounded-lg max-w-sm"
+                        ):
+                            ui.label("📄 Document uploaded").classes("font-semibold")
+                            ui.label(filename).classes("text-sm text-slate-300")
+                            ui.label(f"{len(file_bytes)//1024} KB").classes(
+                                "text-xs text-slate-400"
+                            )
+
+                    _scroll_to_bottom()
+
+            _store_message_js(msg)
             ui.notify("✓ Document ready", type="positive")
 
-        logger.info(f"File loaded: {len(file_bytes)} bytes")
-
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to handle file upload")
-        ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
+        ui.notify("Failed to load file", type="negative")
 
 
 # =================================================
@@ -1138,11 +1129,13 @@ async def _send_file() -> None:
         )
 
         if state.session_id:
-            ui.run_javascript(
-                f"""
-                sessionStorage.setItem('session_id', '{state.session_id}');
-                """
-            )
+            if CHAT_CONTAINER:
+                with CHAT_CONTAINER:
+                    ui.run_javascript(
+                        f"""
+                    sessionStorage.setItem('session_id', '{state.session_id}');
+                    """
+                    )
 
         text = response.get("response_text") or response.get("message")
         disclaimer = response.get("disclaimer")
