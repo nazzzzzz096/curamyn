@@ -2,6 +2,8 @@
 Optimized Piper TTS with caching and proper WAV output.
 
 ✅ FIXED: Converts raw PCM to proper WAV format
+✅ FIXED: Proper error message propagation
+✅ FIXED: Text truncation preserves word boundaries
 """
 
 import io
@@ -133,6 +135,9 @@ def _synthesize_piper(text: str) -> bytes:
     except subprocess.TimeoutExpired:
         logger.error("Piper TTS timed out")
         raise RuntimeError("TTS generation timed out")
+    except RuntimeError:
+        # ✅ Re-raise RuntimeError with original message (preserves "Piper produced no audio output")
+        raise
     except Exception as exc:
         logger.exception("Unexpected TTS error")
         raise RuntimeError("TTS generation failed") from exc
@@ -160,10 +165,15 @@ def synthesize_tts(text: str, cache_key: Optional[str] = None) -> bytes:
         logger.debug(f"🎯 Using cached TTS for '{cache_key}'")
         return _TTS_CACHE[cache_key]
 
-    # Limit text length for faster generation
+    # ✅ Limit text length for faster generation (preserve word boundaries)
     MAX_CHARS = 200
     if len(text) > MAX_CHARS:
-        text = text[:MAX_CHARS].rsplit(" ", 1)[0] + "..."
+        # Find last space before MAX_CHARS to avoid cutting mid-word
+        truncated = text[:MAX_CHARS]
+        last_space = truncated.rfind(" ")
+        if last_space > 0:
+            truncated = truncated[:last_space]
+        text = truncated + "..."
         logger.debug(f"Truncated text to {len(text)} chars")
 
     # Generate audio
