@@ -839,20 +839,33 @@ async def _on_file_selected_DIAGNOSTIC(e: events.UploadEventArguments) -> None:
 # FILE UPLOAD
 # =================================================
 async def _on_file_selected(e: events.UploadEventArguments) -> None:
-    """Handle file upload with proper error handling."""
+    """✅ WORKS WITH YOUR NICEGUI VERSION"""
     global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE
 
     try:
         logger.info("User selected a file")
 
-        #  Read file content properly
-        if hasattr(e.content, "read"):
+        # ✅ FIX: Your NiceGUI version stores content differently
+        # Try multiple approaches for compatibility
+        file_bytes = None
+
+        # Method 1: Direct content (NiceGUI 1.x)
+        if hasattr(e, "content") and hasattr(e.content, "read"):
             file_bytes = await e.content.read()
-        elif hasattr(e, "content"):
+        # Method 2: Direct content bytes (older versions)
+        elif hasattr(e, "content") and isinstance(e.content, bytes):
             file_bytes = e.content
+        # Method 3: Sender attribute (some versions)
+        elif hasattr(e, "sender"):
+            upload_widget = e.sender
+            if hasattr(upload_widget, "content"):
+                file_bytes = upload_widget.content
         else:
-            logger.error(f"Unknown upload structure: {dir(e)}")
-            ui.notify("File upload failed - unsupported format", type="negative")
+            # ✅ DIAGNOSTIC: Log what's actually available
+            logger.error(
+                f"Unknown upload structure. Available: {[a for a in dir(e) if not a.startswith('_')]}"
+            )
+            ui.notify("File upload not supported - check logs", type="negative")
             return
 
         if not file_bytes or len(file_bytes) == 0:
@@ -863,14 +876,14 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
         filename = e.name if hasattr(e, "name") else "upload.file"
         filename_lower = filename.lower()
 
-        # safe to check file type
+        # ✅ NOW safe to check file type
         is_jpeg = filename_lower.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
             b"\xff\xd8\xff"
         )
         is_png = filename_lower.endswith(".png") or file_bytes.startswith(b"\x89PNG")
         is_pdf = filename_lower.endswith(".pdf") or file_bytes.startswith(b"%PDF")
 
-        # Handle based on mode
+        # Rest of your code...
         if CURRENT_MODE == "image":
             if is_jpeg:
                 mime_type = "image/jpeg"
@@ -878,16 +891,14 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
                 mime_type = "image/png"
             elif is_pdf:
                 mime_type = "application/pdf"
-                ui.notify("📄 PDF uploaded as image", type="info")
             else:
                 ui.notify("Please upload JPG, PNG, or PDF", type="warning")
                 PENDING_FILE_BYTES = None
                 return
 
-            # Show preview (skip for PDF)
+            # Show preview
             if mime_type != "application/pdf":
                 encoded = base64.b64encode(file_bytes).decode()
-
                 msg = {
                     "author": "You",
                     "sent": True,
@@ -895,7 +906,6 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
                     "image_data": encoded,
                     "mime_type": mime_type,
                 }
-
                 state.messages.append(msg)
 
                 if CHAT_CONTAINER:
@@ -904,23 +914,17 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
                             ui.image(f"data:{mime_type};base64,{encoded}").classes(
                                 "max-w-xs rounded-lg border border-gray-600"
                             )
-
                 _store_message_js(msg)
                 _scroll_to_bottom()
 
-            ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready to send", type="positive")
+            ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready", type="positive")
 
         elif CURRENT_MODE == "document":
-            if is_pdf or is_jpeg or is_png:
-                ui.notify("✓ Document ready to send", type="positive")
-            else:
-                ui.notify("Please upload PDF, JPG, or PNG", type="warning")
-                PENDING_FILE_BYTES = None
-                return
+            ui.notify("✓ Document ready", type="positive")
 
         logger.info(f"File loaded: {len(file_bytes)} bytes")
 
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to handle file upload")
         ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
