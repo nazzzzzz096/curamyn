@@ -69,6 +69,7 @@ python-multipart==0.0.9
 # Validation
 # =========================
 email-validator==2.1.1
+pathvalidate
 
 # =========================
 # Async Testing
