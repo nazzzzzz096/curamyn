@@ -121,7 +121,7 @@ def _handle_login(
 
         ui.notify("Login successful", type="positive")
 
-        # ✅ CHECK ONBOARDING COMPLETION STATUS
+        # CHECK ONBOARDING COMPLETION STATUS
         try:
             from frontend.api.onboarding_client import check_onboarding_status
 

@@ -13,7 +13,7 @@ from app.chat_service.services.tts_streamer import synthesize_tts
 from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
-MAX_TTS_CHARS = 220  # Piper-safe limit
+MAX_TTS_CHARS = 420  # Piper-safe limit
 
 
 def _get_cache_key(text: str) -> Optional[str]:
@@ -33,6 +33,20 @@ def _get_cache_key(text: str) -> Optional[str]:
 
 
 def normalized_response_text(text: str, severity: str) -> str:
+    """
+    Normalize response text and append severity-aware closing phrase.
+
+    Ensures text ends with proper punctuation and appends a severity-appropriate
+    closing phrase if one is not already present. This provides consistent,
+    empathetic responses based on the severity level of the conversation.
+
+    Args:
+        text: The base response text to normalize
+        severity: Severity level ("low", "moderate", "high") determining the closing phrase
+
+    Returns:
+        str: Normalized text with closing phrase and proper punctuation
+    """
     text = text.strip()
 
     endings = {
@@ -49,6 +63,20 @@ def normalized_response_text(text: str, severity: str) -> str:
 
 
 def normalize_and_prepare_for_tts(text: str, severity: str) -> str:
+    """
+    Normalize response text and prepare it for TTS synthesis.
+
+    Applies normalization, sanitization, and length constraints to ensure
+    the text is suitable for text-to-speech conversion. Enforces maximum
+    character limits while preserving word boundaries.
+
+    Args:
+        text: The response text to prepare
+        severity: Severity level for normalization ("low", "moderate", "high")
+
+    Returns:
+        str: TTS-ready text with proper formatting and length constraints
+    """
     text = normalized_response_text(text, severity)
     text = sanitize_for_tts(text)
 
@@ -59,6 +87,18 @@ def normalize_and_prepare_for_tts(text: str, severity: str) -> str:
 
 
 def sanitize_for_tts(text: str) -> str:
+    """
+    Sanitize text for TTS synthesis by removing problematic punctuation patterns.
+
+    Cleans up formatting issues that can cause TTS engines to produce incorrect
+    pronunciation or pauses, specifically handling multiple dots and mixed punctuation.
+
+    Args:
+        text: Raw text to sanitize
+
+    Returns:
+        str: Sanitized text suitable for TTS processing
+    """
     text = text.replace("....", "...")
     text = text.replace("?.", "?")
     text = text.replace("!.", "!")

@@ -18,6 +18,26 @@ router = APIRouter(
 
 
 def _serialize_message(db_message: dict) -> Dict[str, object]:
+    """
+    Serialize a database message to a normalized API response format.
+
+    Transforms raw database message documents into a standardized format based on
+    message type (text, audio, or image). Normalizes field names and ensures
+    consistent structure across different message types for API consumers.
+
+    Args:
+        db_message: Raw message document from the database containing type, author,
+                    content data, and metadata fields.
+
+    Returns:
+        Dict[str, object]: Normalized message dictionary with fields:
+            - author: Message sender identifier
+            - type: Message type ("text", "audio", or "image")
+            - text/audio_data/image_data: Actual message content (depends on type)
+            - mime_type: Media type (for audio/image messages)
+            - sent: Boolean indicating if message was sent
+            - timestamp: Message creation timestamp
+    """
     msg_type = db_message.get("type", "text")
 
     if msg_type == "audio":

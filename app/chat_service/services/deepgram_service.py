@@ -55,7 +55,7 @@ async def transcribe_audio(audio_bytes: bytes, use_fallback: bool = True) -> str
         return ""
 
     try:
-        # ✅ TRY DEEPGRAM FIRST
+        #  TRY DEEPGRAM FIRST
         client = get_deepgram_client()
 
         payload: FileSource = {"buffer": audio_bytes}
@@ -96,7 +96,7 @@ async def transcribe_audio(audio_bytes: bytes, use_fallback: bool = True) -> str
     except Exception as exc:
         logger.warning(f"⚠️ Deepgram failed: {exc}")
 
-        # ✅ FALLBACK TO WHISPER
+        #  FALLBACK TO WHISPER
         if use_fallback:
             logger.info("🔄 Falling back to Whisper STT...")
             try:

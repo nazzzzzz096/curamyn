@@ -77,22 +77,20 @@ async def run_interaction(
             image_type=image_type,
         )
 
-        # ✅ Store document text + track when it was uploaded
+        #  Store document text + track when it was uploaded
         if input_type == "image" and image_type == "document" and normalized_text:
             state.last_document_text = normalized_text
             state.document_uploaded_at = time.time()
             state.document_upload_message_index = len(
                 state.all_messages
-            )  # ✅ Track position
+            )  #  Track position
             logger.info("Stored document text with message index")
 
-        # ✅ Store image analysis + track when it was uploaded
+        #  Store image analysis + track when it was uploaded
         if context.get("image_analysis"):
             state.last_image_analysis = context["image_analysis"]
             state.last_image_type = image_type
-            state.image_upload_message_index = len(
-                state.all_messages
-            )  # ✅ Track position
+            state.image_upload_message_index = len(state.all_messages)  # Track position
             state.save()
             logger.info(
                 "Stored image analysis with message index",
@@ -151,7 +149,7 @@ async def run_interaction(
         logger.info("Interaction completed", extra={"session_id": session_id})
         response["session_id"] = state.session_id
 
-        # ✅ Use new add_message method
+        #  Use new add_message method
         state.add_message("user", normalized_text)
         state.add_message("assistant", llm_result.get("response_text", ""))
 
@@ -335,22 +333,22 @@ def _is_asking_about_medical_terms(text: str, document_text: str = "") -> bool:
     # Check if medical terms are mentioned
     has_medical_term = any(term in text_lower for term in medical_terms)
 
-    # ✅ MATCH 1: Direct questions about medical terms
+    # MATCH 1: Direct questions about medical terms
     # Example: "What is hemoglobin?"
     if has_question_pattern and has_medical_term:
         return True
 
-    # ✅ MATCH 2: Concern/interpretation questions
+    # MATCH 2: Concern/interpretation questions
     # Example: "Is my hemoglobin okay?" or "Why is my TSH high?"
     if has_concern_pattern and has_medical_term:
         return True
 
-    # ✅ MATCH 3: Range/value questions
+    # MATCH 3: Range/value questions
     # Example: "What is the normal range for hemoglobin?"
     if has_range_pattern and has_medical_term:
         return True
 
-    # ✅ MATCH 4: Check if question references document content
+    # MATCH 4: Check if question references document content
     # Example: "What about the result in my report?"
     document_references = [
         "my report",
@@ -490,7 +488,7 @@ def _route_llm(
             logger.info("Document context expired (>10 minutes) - clearing")
             state.clear_document_context()
 
-        # ✅ NEW CHECK 3: Full document summary request
+        #   Full document summary request
         if state.last_document_text:
             wants_full_summary = any(
                 phrase in normalized_text.lower()
@@ -508,7 +506,7 @@ def _route_llm(
                 logger.info("✓ Routing to health advisor WITH document context")
                 session_context = state.get_current_context()
 
-                # ✅ Pass document context to health advisor
+                #  Pass document context to health advisor
                 return analyze_health_text(
                     text=normalized_text,
                     user_id=user_id,

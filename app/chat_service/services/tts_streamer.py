@@ -1,9 +1,9 @@
 """
 Optimized Piper TTS with caching and proper WAV output.
 
-✅ FIXED: Converts raw PCM to proper WAV format
-✅ FIXED: Proper error message propagation
-✅ FIXED: Text truncation preserves word boundaries
+ Converts raw PCM to proper WAV format
+ Proper error message propagation
+ Text truncation preserves word boundaries
 """
 
 import io
@@ -15,7 +15,7 @@ from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ✅ TTS CACHE for instant responses
+#  TTS CACHE for instant responses
 _TTS_CACHE: dict[str, bytes] = {}
 
 
@@ -79,7 +79,7 @@ def _synthesize_piper(text: str) -> bytes:
     """
     Generate proper WAV audio using Piper TTS.
 
-    ✅ FIXED: Returns valid WAV files, not raw PCM!
+    Returns valid WAV files, not raw PCM!
 
     Args:
         text: Text to convert to speech
@@ -117,10 +117,10 @@ def _synthesize_piper(text: str) -> bytes:
 
         logger.debug(f"Piper generated {len(raw_audio)} bytes of raw PCM")
 
-        # ✅ Step 2: Convert RAW PCM to proper WAV format
+        # Step 2: Convert RAW PCM to proper WAV format
         wav_audio = _convert_raw_to_wav(raw_audio)
 
-        # ✅ Validate WAV header
+        #  Validate WAV header
         if not wav_audio.startswith(b"RIFF"):
             raise RuntimeError("WAV conversion failed - invalid header")
 
@@ -136,7 +136,7 @@ def _synthesize_piper(text: str) -> bytes:
         logger.error("Piper TTS timed out")
         raise RuntimeError("TTS generation timed out")
     except RuntimeError:
-        # ✅ Re-raise RuntimeError with original message (preserves "Piper produced no audio output")
+        #  Re-raise RuntimeError with original message (preserves "Piper produced no audio output")
         raise
     except Exception as exc:
         logger.exception("Unexpected TTS error")
@@ -147,7 +147,7 @@ def synthesize_tts(text: str, cache_key: Optional[str] = None) -> bytes:
     """
     Synthesize TTS with optional caching.
 
-    ✅ FIXED: Now returns proper WAV files!
+     Now returns proper WAV files!
 
     Args:
         text: Text to synthesize
@@ -159,14 +159,14 @@ def synthesize_tts(text: str, cache_key: Optional[str] = None) -> bytes:
     Raises:
         RuntimeError: If TTS generation fails
     """
-
+    text = _truncate_text(text, max_chars=200)
     # Check cache first
     if cache_key and cache_key in _TTS_CACHE:
         logger.debug(f"🎯 Using cached TTS for '{cache_key}'")
         return _TTS_CACHE[cache_key]
 
-    # ✅ Limit text length for faster generation (preserve word boundaries)
-    MAX_CHARS = 200
+    #  Limit text length for faster generation (preserve word boundaries)
+    MAX_CHARS = 400
     if len(text) > MAX_CHARS:
         # Find last space before MAX_CHARS to avoid cutting mid-word
         truncated = text[:MAX_CHARS]
@@ -185,3 +185,29 @@ def synthesize_tts(text: str, cache_key: Optional[str] = None) -> bytes:
         logger.debug(f"Cached TTS for '{cache_key}'")
 
     return audio_bytes
+
+
+def _truncate_text(text: str, max_chars: int = 200) -> str:
+    """
+    Truncate text to a maximum character length while preserving word boundaries.
+
+    Ensures that truncation does not cut off mid-word by finding the last space
+    before the character limit and appending "..." to indicate truncation.
+
+    Args:
+        text: The text string to truncate
+        max_chars: Maximum number of characters allowed (default: 200)
+
+    Returns:
+        str: Truncated text with "..." appended if truncation occurred,
+             or original text if it's within the limit
+    """
+    if len(text) <= max_chars:
+        return text
+
+    truncated = text[:max_chars]
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        truncated = truncated[:last_space]
+
+    return truncated + "..."

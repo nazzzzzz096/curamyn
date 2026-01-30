@@ -43,7 +43,7 @@ def get_current_user(
         user = verify_access_token(token)
         request.state.user = user
 
-        # ✅ Add user context to Sentry
+        #  Add user context to Sentry
         sentry_sdk.set_user(
             {
                 "id": user.get("sub"),
@@ -57,7 +57,7 @@ def get_current_user(
     except ValueError as exc:
         logger.warning("Authentication failed")
 
-        # ✅ Capture failed auth in Sentry
+        #  Capture failed auth in Sentry
         sentry_sdk.capture_exception(exc)
 
         raise HTTPException(

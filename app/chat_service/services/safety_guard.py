@@ -36,7 +36,7 @@ EMERGENCY_KEYWORDS = [
     "fainted",
 ]
 
-# ✅ NEW: Out-of-scope (general knowledge) patterns
+#  Out-of-scope (general knowledge) patterns
 GENERAL_KNOWLEDGE_PATTERNS = [
     "who is",
     "who was",
@@ -139,7 +139,7 @@ def check_output_safety(*, user_text: str) -> None:
 
     lowered = user_text.lower()
 
-    # ✅ NEW: Check for out-of-scope general knowledge questions
+    # Check for out-of-scope general knowledge questions
     is_health_related = any(keyword in lowered for keyword in HEALTH_KEYWORDS)
 
     if not is_health_related:

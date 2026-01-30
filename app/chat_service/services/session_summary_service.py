@@ -29,6 +29,22 @@ MODEL_NAME = "models/gemini-flash-latest"
 # INTERNAL LLM LOADER (SUMMARY ONLY)
 # ==================================================
 def _load_gemini():
+    """
+    Load Gemini client and configuration for session summary generation.
+
+    Attempts to initialize the Gemini API client using credentials from environment
+    variables. Returns a tuple of (client, config_class) for use in summary LLM calls.
+    If initialization fails (missing API key or import errors), returns (None, None).
+
+    Returns:
+        tuple: (client, GenerateContentConfig) where:
+            - client: Initialized genai.Client instance, or None if unavailable
+            - GenerateContentConfig: Configuration class for API requests, or None if unavailable
+
+    Raises:
+        RuntimeError: If Gemini API key is not found in environment (caught internally)
+        Exception: If Google genai module import fails (logged as warning)
+    """
     try:
         from google import genai
         from google.genai.types import GenerateContentConfig
@@ -252,6 +268,20 @@ Now generate the summary:
 # HELPERS
 # ==================================================
 def _extract_text(response) -> str | None:
+    """
+    Extract text content from a Gemini API response object.
+
+    Attempts multiple strategies to extract text from the response:
+    1. Direct text attribute if available
+    2. Parse from candidates list structure (standard Gemini response format)
+    3. Collect text from multiple parts if response is fragmented
+
+    Args:
+        response: Gemini API response object (from generate_content)
+
+    Returns:
+        str | None: Extracted and stripped text content, or None if no text found
+    """
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
         return text.strip()
@@ -274,6 +304,19 @@ def _extract_text(response) -> str | None:
 
 
 def _safe_parse_json(text: str) -> Dict:
+    """
+    Parse JSON from text with cleanup and graceful error handling.
+
+    Removes markdown code blocks (```json and ```) and extracts the first JSON
+    object found in the text using regex. Returns an empty dict if parsing fails,
+    ensuring no exceptions are raised.
+
+    Args:
+        text: String containing JSON text, possibly with markdown formatting
+
+    Returns:
+        Dict: Parsed JSON object, or empty dict {} if parsing fails or text is empty
+    """
     if not text:
         return {}
 
@@ -290,10 +333,41 @@ def _safe_parse_json(text: str) -> Dict:
 
 
 def _safe_enum(value, allowed, default=None):
+    """
+    Validate a value against an allowed list with fallback to default.
+
+    Checks if a value is in the allowed list and returns it if valid,
+    otherwise returns the default value. Useful for enum-like validation.
+
+    Args:
+        value: The value to validate
+        allowed: Iterable of allowed values
+        default: Default value to return if validation fails (default: None)
+
+    Returns:
+        The original value if in allowed list, otherwise the default value
+    """
     return value if value in allowed else default
 
 
 def _empty_summary() -> Dict:
+    """
+    Generate a default empty/minimal session summary response.
+
+    Returns a standardized summary structure when no meaningful conversation
+    occurred or when summary generation fails. Used as a fallback to ensure
+    consistent response format.
+
+    Returns:
+        Dict: Empty summary with keys:
+            - summary_text: Placeholder message indicating limited interaction
+            - primary_intent: None
+            - primary_emotion: None
+            - overall_sentiment: None
+            - severity_peak: None
+            - health_topics: Empty list
+            - context_details: Empty dict
+    """
     return {
         "summary_text": (
             "The session involved limited or low-signal health-related interaction "

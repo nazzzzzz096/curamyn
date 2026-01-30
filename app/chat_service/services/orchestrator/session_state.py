@@ -30,7 +30,7 @@ class SessionState:
     def __init__(self, session_id: str):
         self.session_id = session_id
 
-        # ✅ ENHANCED: Store ALL messages
+        #  ENHANCED: Store ALL messages
         self.all_messages: list[dict] = []
         self.last_messages: list[dict] = []
 
@@ -48,12 +48,12 @@ class SessionState:
         self.current_sentiment: str = "neutral"
         self.current_topic: Optional[str] = None
 
-        # ✅ PERSISTENT: Image context
+        #  PERSISTENT: Image context
         self.last_image_analysis: Optional[dict] = None
         self.last_image_type: Optional[str] = None
         self.image_upload_message_index: Optional[int] = None
 
-        # ✅ PERSISTENT: Document context
+        #  PERSISTENT: Document context
         self.last_document_text: Optional[str] = None
         self.document_uploaded_at: Optional[float] = None
         self.document_upload_message_index: Optional[int] = None

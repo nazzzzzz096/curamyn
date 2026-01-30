@@ -65,7 +65,7 @@ def explain_medical_terms(
     with mlflow_context():
         mlflow_safe(mlflow.set_tag, "service", "educational_llm")
 
-        # ✅ NEW: Detect if user wants full summary vs. term explanation
+        #  Detect if user wants full summary vs. term explanation
         wants_summary = any(
             phrase in question.lower()
             for phrase in [

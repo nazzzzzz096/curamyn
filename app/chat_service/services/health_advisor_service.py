@@ -1,5 +1,5 @@
 """
-FIXED: Increase token limits to prevent response truncation
+Increase token limits to prevent response truncation
 """
 
 import os
@@ -144,7 +144,7 @@ def analyze_health_text(
                 contents=[{"role": "user", "parts": [{"text": prompt}]}],
                 config=GenerateContentConfig(
                     temperature=0.7,
-                    max_output_tokens=1500,  # ✅ INCREASED from 900
+                    max_output_tokens=1500,  # INCREASED from 900
                     top_p=0.9,
                 ),
             )
@@ -169,7 +169,7 @@ def analyze_health_text(
                     contents=[{"role": "user", "parts": [{"text": prompt}]}],
                     config=GenerateContentConfig(
                         temperature=0.7,
-                        max_output_tokens=1500,  # ✅ INCREASED from 900
+                        max_output_tokens=1500,  # INCREASED from 900
                         top_p=0.9,
                     ),
                 )
@@ -191,7 +191,7 @@ def analyze_health_text(
             answer = SAFE_FALLBACK
             model_used = "safe_fallback"
 
-        # ✅ CLEAN MARKDOWN from response
+        #  CLEAN MARKDOWN from response
         from app.chat_service.services.markdown_cleaner import clean_llm_response
 
         answer = clean_llm_response(answer)
@@ -242,7 +242,11 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
     if wants_doc_summary:
         mode = "Provide a clear summary of the document content mentioned in the context. Highlight key findings factually without diagnosis."
     elif wants_steps:
-        mode = "Provide 3–5 gentle, practical self-care steps. in bullet points"
+        mode = (
+            "Provide 3–5 gentle, practical self-care steps. "
+            "Each step must be on a new line and start with a dash (-). "
+            "Keep each step short and easy to read."
+        )
     else:
         mode = "Provide a warm, empathetic, and conversational response."
 

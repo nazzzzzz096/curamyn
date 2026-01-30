@@ -209,7 +209,7 @@ class ContextAgent:
                 logger.exception("Failed to load previous session summaries")
 
         # -------------------------------
-        # 2. ✅ PERSISTENT SESSION CONTEXT (ALWAYS AVAILABLE)
+        # 2.  PERSISTENT SESSION CONTEXT (ALWAYS AVAILABLE)
         # -------------------------------
         persistent_context = ""
 
@@ -249,7 +249,7 @@ IMPORTANT: Only reference this image if the user explicitly asks about it.
             logger.info("Injected persistent image context")
 
         # -------------------------------
-        # 3. ✅ SLIDING WINDOW: Recent conversation (last 15 messages)
+        # 3.  SLIDING WINDOW: Recent conversation (last 15 messages)
         # -------------------------------
         recent_messages = session_state.get_conversation_window(max_messages=15)
         history_block = "\n".join(
@@ -259,7 +259,7 @@ IMPORTANT: Only reference this image if the user explicitly asks about it.
         )
 
         # -------------------------------
-        # 4. ✅ CONDENSED SUMMARY: Older conversation
+        # 4.  CONDENSED SUMMARY: Older conversation
         # -------------------------------
         older_summary = session_state.get_condensed_history()
 
@@ -295,15 +295,15 @@ IMPORTANT: Only reference this image if the user explicitly asks about it.
         if awareness_block:
             blocks.append(f"Support considerations:\n{awareness_block}")
 
-        # ✅ Always include persistent context (documents/images)
+        # Always include persistent context (documents/images)
         if persistent_context:
             blocks.append(persistent_context)
 
-        # ✅ Include condensed older conversation
+        #  Include condensed older conversation
         if older_summary:
             blocks.append(f"Earlier conversation summary:\n{older_summary}")
 
-        # ✅ Always include recent conversation
+        #  Always include recent conversation
         if history_block:
             blocks.append(f"Recent conversation (last 15 messages):\n{history_block}")
 

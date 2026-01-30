@@ -172,6 +172,21 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
 # Helpers
 # ==================================================
 def _fallback(message: str) -> dict:
+    """
+    Create a fallback response dictionary with a custom message.
+
+    Wraps a custom message in the standard response format when document
+    analysis cannot be performed or when pre-validation checks fail.
+
+    Args:
+        message: Custom message to include in the response
+
+    Returns:
+        dict: Response with keys:
+            - intent: Set to "document_understanding"
+            - severity: Set to "informational"
+            - response_text: The provided message
+    """
     return {
         "intent": "document_understanding",
         "severity": "informational",
@@ -180,10 +195,28 @@ def _fallback(message: str) -> dict:
 
 
 def _fallback_text_response() -> dict:
+    """
+    Create a fallback response with the default fallback message.
+
+    Combines fallback functionality with the standard fallback text message.
+    Used when the Gemini client is unavailable or when LLM processing fails.
+
+    Returns:
+        dict: Fallback response with standard format and default message
+    """
     return _fallback(_fallback_text())
 
 
 def _fallback_text() -> str:
+    """
+    Return the default fallback message for document analysis failures.
+
+    Provides a user-friendly message when document understanding cannot
+    be performed due to extraction quality or processing issues.
+
+    Returns:
+        str: Default fallback message explaining the limitation
+    """
     return (
         "This appears to be a medical laboratory document. "
         "However, the extracted text does not provide enough structure "

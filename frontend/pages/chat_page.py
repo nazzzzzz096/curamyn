@@ -779,7 +779,7 @@ def _set_image_mode(img_type: str) -> None:
 
 
 def _set_document_mode() -> None:
-    """✅ FIXED: Switch to document mode and trigger file browser."""
+    """Switch to document mode and trigger file browser."""
     global CURRENT_MODE, CURRENT_IMAGE_TYPE, MODE_LABEL
 
     CURRENT_MODE = "document"
@@ -795,7 +795,7 @@ def _set_document_mode() -> None:
                 timeout=1500,
             )
 
-    # ✅ FIX #3: Trigger file browser (don't call .open())
+    #  Trigger file browser (don't call .open())
     ui.run_javascript(
         """
         const input = document.querySelector('#hidden-upload input[type="file"]');
@@ -821,11 +821,11 @@ async def _on_file_selected(e: UploadEventArguments) -> None:
         file_bytes = None
         filename = getattr(e, "name", "upload.file")
 
-        # ✅ CASE 1: SmallFileUpload (most common)
+        #  SmallFileUpload (most common)
         if hasattr(e.file, "read"):
             file_bytes = await e.file.read()
 
-        # ✅ CASE 2: LargeFileUpload (saved to disk)
+        #  LargeFileUpload (saved to disk)
         elif hasattr(e.file, "path"):
             file_path = Path(e.file.path)
             if file_path.exists():
@@ -1203,7 +1203,7 @@ def _render_message(message: dict, container) -> None:
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
-                # ✅ FIX: Add controls and proper attributes
+                #  Add controls and proper attributes
                 ui.html(
                     f"""
                     <audio controls preload="auto" style="max-width: 400px;">

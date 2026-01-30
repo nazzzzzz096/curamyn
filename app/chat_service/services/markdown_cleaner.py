@@ -1,5 +1,5 @@
 """
-FIXED: Clean markdown formatting from all LLM responses
+Clean markdown formatting from all LLM responses
 """
 
 import re

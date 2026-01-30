@@ -48,7 +48,7 @@ def user_or_ip(request: Request) -> str:
         return "anonymous"
 
 
-# ✅ Global limiter instance
+#  Global limiter instance
 limiter = Limiter(
     key_func=user_or_ip,
     default_limits=["100/minute"],  # Safety net

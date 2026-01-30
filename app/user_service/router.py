@@ -99,7 +99,7 @@ def login(request: Request, payload: UserLogin) -> TokenResponse:
             }
         )
 
-        # ✅ AUDIT LOG: Successful login
+        #  AUDIT LOG: Successful login
         log_login(
             user_id=user["user_id"],
             ip_address=ip_address,
@@ -116,7 +116,7 @@ def login(request: Request, payload: UserLogin) -> TokenResponse:
         }
 
     except ValueError:
-        # ✅ AUDIT LOG: Failed login
+        #  AUDIT LOG: Failed login
         log_login(
             user_id=payload.email,  # Use email since we don't have user_id
             ip_address=ip_address,
