@@ -242,7 +242,7 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
     if wants_doc_summary:
         mode = "Provide a clear summary of the document content mentioned in the context. Highlight key findings factually without diagnosis."
     elif wants_steps:
-        mode = "Provide 3–5 gentle, practical self-care steps."
+        mode = "Provide 3–5 gentle, practical self-care steps. in bullet points"
     else:
         mode = "Provide a warm, empathetic, and conversational response."
 

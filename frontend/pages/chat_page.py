@@ -655,7 +655,7 @@ async def _stop_recording() -> None:
 
 @app.post("/_nicegui_api/send_voice")
 async def send_voice(audio_array: list[int]) -> dict:
-    """✅ FIXED: Audio with proper state management"""
+    """Handle voice input with proper state management."""
     logger.info("Received voice input")
 
     if not state.token:
@@ -685,7 +685,7 @@ async def send_voice(audio_array: list[int]) -> dict:
                 if result.get("message"):
                     _add_ai(result["message"])
 
-                # ✅ FIX: Properly render audio
+                # Properly add audio to state BEFORE rendering
                 if result.get("audio_base64"):
                     audio_msg = {
                         "author": "Curamyn",
@@ -695,15 +695,15 @@ async def send_voice(audio_array: list[int]) -> dict:
                         "mime_type": "audio/wav",
                     }
 
-                    # ✅ CRITICAL: Add to state BEFORE rendering
+                    #   Add to state FIRST
                     state.messages.append(audio_msg)
 
-                    # Render
+                    # Then render
                     _render_message(audio_msg, CHAT_CONTAINER)
                     _store_message_js(audio_msg)
                     _scroll_to_bottom()
 
-                    # Auto-play
+                    #  Auto-play with better error handling
                     ui.run_javascript(
                         """
                         setTimeout(() => {
@@ -712,16 +712,14 @@ async def send_voice(audio_array: list[int]) -> dict:
                                 const lastAudio = audios[audios.length - 1];
                                 lastAudio.load();
                                 lastAudio.play().catch(err => {
-                                    console.log('Autoplay blocked:', err);
+                                    console.log('Autoplay blocked - user needs to click play');
                                 });
                             }
-                        }, 300);
+                        }, 500);
                     """
                     )
 
                     logger.info("✅ Audio rendered successfully")
-                else:
-                    ui.notify("⚠️ Audio unavailable", type="warning")
 
         state.session_id = result.get("session_id", state.session_id)
         return result
@@ -841,56 +839,31 @@ async def _on_file_selected_DIAGNOSTIC(e: events.UploadEventArguments) -> None:
 # FILE UPLOAD
 # =================================================
 async def _on_file_selected(e: events.UploadEventArguments) -> None:
-    """
-    ✅ REAL FIX for YOUR NiceGUI version
-
-    Based on error: AttributeError: 'UploadEventArguments' object has no attribute 'content'
-    """
+    """Handle file upload with proper error handling."""
     global PENDING_FILE_BYTES, CURRENT_MODE, CURRENT_IMAGE_TYPE
 
     try:
         logger.info("User selected a file")
 
-        # ✅ YOUR NICEGUI VERSION: File bytes are directly in e (not e.content)
-        # Try multiple approaches:
-
-        # Approach 1: Direct file property
-        if hasattr(e, "file"):
-            file_bytes = e.file
-        # Approach 2: Direct content property
+        #  Read file content properly
+        if hasattr(e.content, "read"):
+            file_bytes = await e.content.read()
         elif hasattr(e, "content"):
-            if callable(e.content.read):
-                file_bytes = await e.content.read()
-            else:
-                file_bytes = e.content
-        # Approach 3: sender property (some NiceGUI versions)
-        elif hasattr(e, "sender") and hasattr(e.sender, "read"):
-            file_bytes = await e.sender.read()
+            file_bytes = e.content
         else:
-            logger.error(f"Unknown upload event structure. Attributes: {dir(e)}")
-            ui.notify("File upload not supported in this version", type="negative")
+            logger.error(f"Unknown upload structure: {dir(e)}")
+            ui.notify("File upload failed - unsupported format", type="negative")
             return
 
-        if not file_bytes:
+        if not file_bytes or len(file_bytes) == 0:
             ui.notify("Empty file", type="warning")
             return
 
         PENDING_FILE_BYTES = file_bytes
-
-        # Get filename (try multiple attributes)
-        filename = None
-        if hasattr(e, "name"):
-            filename = e.name
-        elif hasattr(e, "filename"):
-            filename = e.filename
-        elif hasattr(e, "sender") and hasattr(e.sender, "name"):
-            filename = e.sender.name
-        else:
-            filename = "upload.file"
-
-        # Detect file type from filename
+        filename = e.name if hasattr(e, "name") else "upload.file"
         filename_lower = filename.lower()
 
+        # safe to check file type
         is_jpeg = filename_lower.endswith((".jpg", ".jpeg")) or file_bytes.startswith(
             b"\xff\xd8\xff"
         )
@@ -927,7 +900,6 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
 
                 if CHAT_CONTAINER:
                     with CHAT_CONTAINER:
-                        # ✅ REMOVE extra column - this was causing spacing issues
                         with ui.row().classes("w-full justify-end"):
                             ui.image(f"data:{mime_type};base64,{encoded}").classes(
                                 "max-w-xs rounded-lg border border-gray-600"
@@ -939,21 +911,16 @@ async def _on_file_selected(e: events.UploadEventArguments) -> None:
             ui.notify(f"✓ {CURRENT_IMAGE_TYPE.upper()} ready to send", type="positive")
 
         elif CURRENT_MODE == "document":
-            if is_pdf:
-                mime_type = "application/pdf"
-            elif is_jpeg or is_png:
-                mime_type = "image/jpeg" if is_jpeg else "image/png"
-                ui.notify("📷 Image uploaded as document", type="info")
+            if is_pdf or is_jpeg or is_png:
+                ui.notify("✓ Document ready to send", type="positive")
             else:
                 ui.notify("Please upload PDF, JPG, or PNG", type="warning")
                 PENDING_FILE_BYTES = None
                 return
 
-            ui.notify(f"✓ Document ready to send", type="positive")
+        logger.info(f"File loaded: {len(file_bytes)} bytes")
 
-        logger.info(f"File loaded: {len(file_bytes)} bytes, type: {mime_type}")
-
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to handle file upload")
         ui.notify("Failed to load file", type="negative")
         PENDING_FILE_BYTES = None
@@ -1222,11 +1189,7 @@ async def _send_file() -> None:
 
 
 def _render_message(message: dict, container) -> None:
-    """
-    Render a single chat message with proper alignment based on sender type.
-    Ensures user messages appear on the right and assistant messages on the left.
-    """
-
+    """Render a single chat message."""
     with container:
         msg_type = message.get("type", "text")
         is_user = message.get("sent", False)
@@ -1235,6 +1198,7 @@ def _render_message(message: dict, container) -> None:
         if msg_type == "audio":
             audio_base64 = message.get("audio_data")
             if not audio_base64:
+                logger.warning("Audio message has no audio_data")
                 return
 
             data_url = f"data:audio/wav;base64,{audio_base64}"
@@ -1242,33 +1206,40 @@ def _render_message(message: dict, container) -> None:
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
+                # ✅ FIX: Add controls and proper attributes
                 ui.html(
                     f"""
-            <audio controls>
-                <source src="{data_url}" type="audio/wav">
-                Your browser does not support audio playback.
-            </audio>
-            """,
+                    <audio controls preload="auto" style="max-width: 400px;">
+                        <source src="{data_url}" type="audio/wav">
+                        Your browser does not support audio playback.
+                    </audio>
+                """,
                     sanitize=False,
                 )
+
+            logger.info(f"Rendered {'user' if is_user else 'AI'} audio message")
             return
 
         # ================= IMAGE =================
         if msg_type == "image":
-            data_url = (
-                f"data:{message.get('mime_type')};base64,"
-                f"{message.get('image_data')}"
-            )
+            image_data = message.get("image_data")
+            mime_type = message.get("mime_type", "image/png")
 
-            # Image stays on RIGHT for user, LEFT for assistant
+            if not image_data:
+                logger.warning("Image message has no image_data")
+                return
+
+            data_url = f"data:{mime_type};base64,{image_data}"
+
             with ui.row().classes(
                 "w-full justify-end" if is_user else "w-full justify-start"
             ):
-                ui.image(data_url).classes("max-w-xs rounded-lg")
+                ui.image(data_url).classes("max-w-xs rounded-lg border border-gray-600")
+
+            logger.info(f"Rendered {'user' if is_user else 'AI'} image message")
             return
 
         # ================= TEXT =================
-
         with ui.row().classes(
             "w-full justify-end" if is_user else "w-full justify-start"
         ):
