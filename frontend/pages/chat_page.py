@@ -501,61 +501,97 @@ def _render_consent_menu():
 # INPUT BAR
 # =================================================
 def _render_input_bar() -> None:
-    """Input bar with proper file upload handling."""
     global UPLOAD_WIDGET
 
     with ui.element("div").classes(
-        "w-full bg-[#0b1220] border-t border-gray-800 p-4 shrink-0"
+        "w-full bg-[#0b1220] border-t border-gray-800 px-4 py-2 shrink-0"
     ):
-        with ui.row().classes("w-full px-4 items-center gap-2"):
 
-            # Mode menu
-            with ui.menu() as type_menu:
-                ui.menu_item("💬 Text", on_click=_set_text_mode)
-                ui.separator()
-                ui.menu_item("🩻 X-ray Image", on_click=lambda: _set_image_mode("xray"))
-                ui.menu_item("🔬 Skin Image", on_click=lambda: _set_image_mode("skin"))
-                ui.menu_item("📄 Medical Document", on_click=_set_document_mode)
+        with ui.row().classes("w-full items-center gap-3 justify-center"):
 
-            ui.button(icon="add_circle", on_click=type_menu.open).props(
-                "flat round"
-            ).classes("text-slate-400 hover:text-emerald-400").tooltip(
-                "Change Input Type"
+            # ─────────────────────────────
+            # + BUTTON
+            # ─────────────────────────────
+            plus_btn = (
+                ui.button(
+                    icon="add_circle",
+                )
+                .props("flat round size=lg")
+                .classes(
+                    "text-slate-300 hover:text-emerald-400 hover:scale-110 transition-transform"
+                )
+                .tooltip("Click to change input type")
             )
 
-            #  File upload with proper async handling
+            # ─────────────────────────────
+            # DROPDOWN (DIALOG, NOT MENU)
+            # ─────────────────────────────
+            with ui.dialog() as type_dialog:
+                with ui.card().classes("w-48 bg-[#0f172a] text-slate-100"):
+                    ui.item(
+                        "💬 Text",
+                        on_click=lambda: (_set_text_mode(), type_dialog.close()),
+                    )
+                    ui.separator()
+                    ui.item(
+                        "🩻 X-ray Image",
+                        on_click=lambda: (_set_image_mode("xray"), type_dialog.close()),
+                    )
+                    ui.item(
+                        "🔬 Skin Image",
+                        on_click=lambda: (_set_image_mode("skin"), type_dialog.close()),
+                    )
+                    ui.item(
+                        "📄 Medical Document",
+                        on_click=lambda: (_set_document_mode(), type_dialog.close()),
+                    )
+
+            plus_btn.on("click", lambda _: type_dialog.open())
+
+            # ─────────────────────────────
+            # UPLOAD
+            # ─────────────────────────────
             UPLOAD_WIDGET = (
                 ui.upload(
                     auto_upload=True,
-                    on_upload=_on_file_selected,  #  This will be async
+                    on_upload=_on_file_selected,
+                    label="Upload Scan",
                 )
-                .props('accept="*"')
-                .classes("hidden")
-                .props('id="hidden-upload"')
+                .props('accept="image/*,.pdf"')
+                .classes("min-w-[220px]")
             )
 
-            # Text input
+            # ─────────────────────────────
+            # INPUT
+            # ─────────────────────────────
             input_box = (
                 ui.input(placeholder="Type your message...")
                 .props("outlined dense dark")
-                .classes("flex-1 bg-slate-800/50 rounded-xl border-slate-700")
+                .classes(
+                    "flex-1 max-w-[60%] bg-slate-800/50 rounded-lg border-slate-700"
+                )
             )
-            input_box.on("keydown.enter", lambda: asyncio.create_task(_send(input_box)))
 
-            # Send button
-            ui.button(
-                icon="send",
-                on_click=lambda: asyncio.create_task(_send(input_box)),
-            ).props("round color=emerald").tooltip("Send Message")
+            input_box.on(
+                "keydown.enter",
+                lambda: asyncio.create_task(_send(input_box)),
+            )
 
-            # Voice controls
+            # ─────────────────────────────
+            # SEND / VOICE
+            # ─────────────────────────────
             with ui.row().classes("gap-1"):
+                ui.button(
+                    icon="send",
+                    on_click=lambda: asyncio.create_task(_send(input_box)),
+                ).props("round dense color=emerald")
+
                 ui.button(icon="mic", on_click=_start_recording).props(
-                    "flat round"
-                ).tooltip("Start Recording")
+                    "flat round dense"
+                )
                 ui.button(icon="stop", on_click=_stop_recording).props(
-                    "flat round"
-                ).tooltip("Stop Recording")
+                    "flat round dense"
+                )
 
 
 def _start_recording() -> None:

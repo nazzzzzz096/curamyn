@@ -3,12 +3,14 @@ Increase token limits to prevent response truncation
 """
 
 import os
+import re
 import time
 import mlflow
 from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from app.chat_service.services.markdown_cleaner import clean_llm_response
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -64,7 +66,6 @@ def analyze_health_text(
             "however",
             "also",
             "what about",
-            "can you",
             "i want to",
             "let's talk about",
             "another thing",
@@ -86,8 +87,29 @@ def analyze_health_text(
             "give me",
         ]
     )
+    STEP_TRIGGERS = [
+        "give me tips",
+        "suggest some tips",
+        "suggest tips",
+        "what can i do",
+        "self care tips",
+        "self-care tips",
+        "steps i can take",
+        "advice for",
+        "tips for",
+        "self care",
+        "tips",
+        "give me some tips",
+        "give me some advice",
+        "help me to improve",
+    ]
 
-    if wants_suggestions or is_new_topic:
+    wants_steps = any(trigger in text.lower() for trigger in STEP_TRIGGERS)
+
+    if wants_steps:
+        logger.info("User requested steps — enforcing structured response")
+
+    elif wants_suggestions or is_new_topic:
         logger.info("User requested suggestions or new topic - routing to LLM")
 
     elif _is_acknowledgement(text):
@@ -117,10 +139,6 @@ def analyze_health_text(
         }
 
     start_time = time.time()
-    wants_steps = any(
-        t in text.lower()
-        for t in ["tip", "tips", "suggest", "what can i do", "help", "advice"]
-    )
 
     prompt = _build_prompt(text, wants_steps, session_context)
 
@@ -169,7 +187,7 @@ def analyze_health_text(
                     contents=[{"role": "user", "parts": [{"text": prompt}]}],
                     config=GenerateContentConfig(
                         temperature=0.7,
-                        max_output_tokens=1500,  # INCREASED from 900
+                        max_output_tokens=1500,
                         top_p=0.9,
                     ),
                 )
@@ -191,10 +209,10 @@ def analyze_health_text(
             answer = SAFE_FALLBACK
             model_used = "safe_fallback"
 
-        #  CLEAN MARKDOWN from response
-        from app.chat_service.services.markdown_cleaner import clean_llm_response
-
         answer = clean_llm_response(answer)
+        if wants_steps:
+            logger.info("Enforcing bullet formatting on response")
+            answer = _force_bullets(answer)
 
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
@@ -243,10 +261,16 @@ def _build_prompt(text: str, wants_steps: bool, context: dict = None) -> str:
         mode = "Provide a clear summary of the document content mentioned in the context. Highlight key findings factually without diagnosis."
     elif wants_steps:
         mode = (
-            "Provide 3–5 gentle, practical self-care steps. "
-            "Each step must be on a new line and start with a dash (-). "
-            "Keep each step short and easy to read."
+            "Respond ONLY as a list of steps.\n"
+            "STRICT RULES:\n"
+            "- Output MUST contain ONLY bullet points\n"
+            "- Each line MUST start with '- '\n"
+            "- Do NOT write any introduction or closing sentence\n"
+            "- Do NOT write paragraphs\n"
+            "- 3 to 5 bullets only\n"
+            "- Each bullet must be one short sentence\n"
         )
+
     else:
         mode = "Provide a warm, empathetic, and conversational response."
 
@@ -258,7 +282,8 @@ Your personality:
 - Kind, caring, and genuinely interested in the person's wellbeing
 - Provide factual information when asked about documents
 - Do NOT diagnose or interpret medical results
-- Do NOT use markdown formatting (**, *, __, etc.) - use plain text only
+- Do NOT use bold, italics, or headings
+- Plain text only
 - Complete all responses - never truncate mid-sentence
 
 Your current task:
@@ -352,3 +377,37 @@ def _is_closure(text: str) -> bool:
         return False
 
     return any(phrase in text for phrase in closure_phrases)
+
+
+def _force_bullets(text: str) -> str:
+    """
+    Force bullet formatting if model ignores structure.
+    """
+    if not text:
+        return text
+
+    # Normalize lines
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # Already valid bullets → return as-is
+    if lines and all(l.startswith("- ") for l in lines):
+        return "\n".join(lines)
+
+    # Remove filler sentences
+    FILLER_PHRASES = {
+        "that makes sense",
+        "i understand",
+        "of course",
+    }
+
+    # Split into sentences
+    sentences = [
+        s.strip()
+        for s in re.split(r"[.!?]\s+", text)
+        if len(s.strip()) > 8 and s.strip().lower() not in FILLER_PHRASES
+    ]
+
+    # Convert to bullets (max 5)
+    bullets = [f"- {s.rstrip('.')}" for s in sentences[:5]]
+
+    return "\n".join(bullets)
