@@ -13,7 +13,7 @@ async def test_voice_pipeline_output_bytes():
 
     # Mock all dependencies
     with patch(
-        "app.chat_service.services.voice_pipeline_service.transcribe_audio",  # ✅ Updated name
+        "app.chat_service.services.voice_pipeline_service.transcribe_audio",  #  Updated name
         new_callable=AsyncMock,
         return_value="hello there",
     ) as mock_stt, patch(
@@ -98,9 +98,8 @@ async def test_voice_pipeline_handles_tts_failure():
 
         result = await voice_chat_pipeline(b"fake_audio")
 
-        # Should return message without audio
         assert "message" in result
-        assert result["message"] == "Hi there!. That makes sense."
+        assert result["message"] == "Hi there!. I hear you ."
         assert result.get("audio_base64") is None
         assert result["tts_failed"] is True
 

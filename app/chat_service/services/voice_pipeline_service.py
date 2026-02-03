@@ -13,7 +13,7 @@ from app.chat_service.services.tts_streamer import synthesize_tts
 from app.chat_service.utils.logger import get_logger
 
 logger = get_logger(__name__)
-MAX_TTS_CHARS = 420  # Piper-safe limit
+MAX_TTS_CHARS = 600
 
 
 def _get_cache_key(text: str) -> Optional[str]:
@@ -50,7 +50,7 @@ def normalized_response_text(text: str, severity: str) -> str:
     text = text.strip()
 
     endings = {
-        "low": "That makes sense.",
+        "low": "I hear you .",
         "moderate": "You're doing the best you can.",
         "high": "You don't have to go through this alone.",
     }
