@@ -5,10 +5,8 @@ Handles fetching chat history and ending chat sessions.
 """
 
 from typing import Any, Dict, List
-
+from requests import RequestException, HTTPError
 import requests
-from requests import RequestException
-
 from frontend.config import settings
 from frontend.utils.logger import get_logger
 
@@ -59,24 +57,46 @@ def fetch_chat_history(
             params={"session_id": session_id},
             timeout=10,
         )
+
+        if response.status_code == 429:
+            logger.warning(
+                "Rate limited while fetching chat history",
+                extra={"session_id": session_id},
+            )
+            # ✅ graceful degradation
+            return []
+
         response.raise_for_status()
 
         payload = response.json()
         return payload.get("messages", [])
 
-    except RequestException as exc:
+    except HTTPError as exc:
+        # Real HTTP errors (401, 403, 500...)
         logger.exception(
-            "Failed to fetch chat history",
-            extra={"session_id": session_id},
+            "HTTP error while fetching chat history",
+            extra={
+                "session_id": session_id,
+                "status_code": exc.response.status_code if exc.response else None,
+            },
         )
         raise ChatHistoryError("Unable to fetch chat history") from exc
 
     except ValueError as exc:
+        # JSON decode errors
         logger.exception(
             "Invalid JSON received while fetching chat history",
             extra={"session_id": session_id},
         )
         raise ChatHistoryError("Invalid response received from server") from exc
+
+    except RequestException as exc:
+        # Network / timeout / DNS errors
+        logger.exception(
+            "Network error while fetching chat history",
+            extra={"session_id": session_id},
+        )
+        raise ChatHistoryError("Unable to fetch chat history") from exc
 
 
 def end_chat_session(

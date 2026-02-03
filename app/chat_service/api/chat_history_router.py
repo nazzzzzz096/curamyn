@@ -70,7 +70,7 @@ def _serialize_message(db_message: dict) -> Dict[str, object]:
 
 
 @router.get("/history")
-@limiter.limit("1/minute")
+@limiter.limit("5/minute")
 def get_chat_history(
     request: Request,
     session_id: str = Query(...),

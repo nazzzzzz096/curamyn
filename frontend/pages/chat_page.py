@@ -1362,16 +1362,18 @@ def _scroll_to_bottom() -> None:
 # =================================================
 
 
+from frontend.api.auth_client import AuthenticationError
+
+
 def _logout(container) -> None:
     """
     Logout the current user safely.
 
-    Backend responsibilities:
+    Backend (best-effort):
     - Generate & store session summary
     - Delete session memory
 
-    Frontend responsibilities:
-    - Call backend logout with session_id
+    Frontend (authoritative):
     - Clear UI + browser state
     """
 
@@ -1380,11 +1382,24 @@ def _logout(container) -> None:
         extra={"session_id": state.session_id},
     )
 
-    logout_user(
-        token=state.token,
-        session_id=state.session_id,
-    )
+    try:
+        logout_user(
+            token=state.token,
+            session_id=state.session_id,
+        )
+    except AuthenticationError as exc:
+        logger.warning(
+            "Backend logout failed, continuing local logout",
+            extra={"session_id": state.session_id},
+            exc_info=exc,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unexpected error during backend logout",
+            extra={"session_id": state.session_id},
+        )
 
+    # Always clear local state
     _clear_browser_chat(container)
 
     state.token = None

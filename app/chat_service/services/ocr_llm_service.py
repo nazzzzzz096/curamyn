@@ -18,6 +18,74 @@ logger = get_logger(__name__)
 load_dotenv()
 client = None
 MODEL_NAME = "models/gemini-flash-latest"
+import random
+from google.genai.errors import ServerError
+
+
+def _call_gemini_with_retry(
+    *,
+    client,
+    model: str,
+    contents: str,
+    config,
+    retries: int = 4,
+    base_delay: float = 1.0,
+):
+    """Call Gemini's `models.generate_content` with retry and exponential backoff.
+
+    This helper invokes `client.models.generate_content` and implements a simple
+    retry loop for transient server-side errors (for example HTTP 503 /
+    overloaded model responses). Retries use exponential backoff with a small
+    random jitter to reduce contention.
+
+    Args:
+        client: An initialized Gemini client providing ``models.generate_content``.
+        model (str): Model identifier to request (for example ``models/gemini-flash-latest``).
+        contents (str): Prompt or input contents to send to the model.
+        config: Configuration object passed through to ``generate_content`` (e.g.
+            a ``GenerateContentConfig`` instance) or ``None``.
+        retries (int): Maximum number of attempts (including the first). Default is 4.
+        base_delay (float): Base delay in seconds used for exponential backoff.
+
+    Returns:
+        The raw response returned by ``client.models.generate_content``.
+
+    Raises:
+        ServerError: Re-raises a ``ServerError`` when the error is not recognized as
+            a transient overload, or when the retry budget is exhausted.
+        Exception: Any other exception raised by the client is propagated.
+
+    Notes:
+        The function treats ServerError messages that contain ``"503"`` or
+        ``"UNAVAILABLE"`` as transient and will retry them. Each retry sleeps for
+        ``base_delay * (2 ** attempt) + jitter`` where jitter is drawn from
+        ``uniform(0, 0.5)`` seconds.
+    """
+    for attempt in range(retries):
+        try:
+            return client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+
+        except ServerError as exc:
+            # 503 / overloaded model
+            if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                if attempt == retries - 1:
+                    raise
+
+                sleep_time = base_delay * (2**attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Gemini overloaded, retrying",
+                    extra={
+                        "attempt": attempt + 1,
+                        "sleep_sec": round(sleep_time, 2),
+                    },
+                )
+                time.sleep(sleep_time)
+            else:
+                raise
 
 
 # ==================================================
@@ -59,12 +127,39 @@ def _clean_markdown(text: str) -> str:
 
 
 # ==================================================
-# Lazy Gemini loader
+#  Gemini loader
 # ==================================================
+_GEMINI_CLIENT = None
+_GEMINI_CONFIG = None
+
+
 def _load_gemini():
+    global _GEMINI_CLIENT, _GEMINI_CONFIG
+    """Load and cache a Gemini client and content config type.
+
+    This function attempts to import and construct a Gemini client using the
+    environment variable ``CURAMYN_GEMINI_API_KEY``. It caches the created
+    client and the ``GenerateContentConfig`` type in module-level variables
+    so subsequent calls return the same objects.
+
+    Behavior:
+        - If ``CURAMYN_ENV`` is set to ``test``, returns ``(None, None)`` to
+          avoid external network calls during tests.
+        - If no API key is set or an import/initialization error occurs,
+          the function logs a warning and returns ``(None, None)``.
+
+    Returns:
+        tuple: ``(client, GenerateContentConfig)`` on success, or ``(None, None)``
+        when Gemini is unavailable or not configured.
+
+    Side effects:
+        Sets the module-level ``_GEMINI_CLIENT`` and ``_GEMINI_CONFIG`` on
+        successful initialization.
     """
-    Lazily load Gemini only outside test environments.
-    """
+
+    if _GEMINI_CLIENT is not None:
+        return _GEMINI_CLIENT, _GEMINI_CONFIG
+
     if os.getenv("CURAMYN_ENV") == "test":
         return None, None
 
@@ -76,7 +171,9 @@ def _load_gemini():
         if not api_key:
             return None, None
 
-        return genai.Client(api_key=api_key), GenerateContentConfig
+        _GEMINI_CLIENT = genai.Client(api_key=api_key)
+        _GEMINI_CONFIG = GenerateContentConfig
+        return _GEMINI_CLIENT, _GEMINI_CONFIG
 
     except Exception as exc:
         logger.warning("Gemini OCR unavailable: %s", exc)
@@ -129,18 +226,20 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
         prompt = _build_prompt(text)
 
         try:
-            response = active_client.models.generate_content(
+            response = _call_gemini_with_retry(
+                client=active_client,
                 model=MODEL_NAME,
                 contents=prompt,
                 config=(
                     GenerationConfig(
                         temperature=0.2,
-                        max_output_tokens=2048,  # Increased for full reports
+                        max_output_tokens=2048,
                     )
                     if GenerationConfig
                     else None
                 ),
             )
+
             output = _extract_llm_text(response)
 
             # Clean markdown formatting
@@ -149,8 +248,11 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             logger.info(f"LLM response length: {len(output)}")
             logger.debug(f"LLM response preview: {output[:200]}")
 
-        except Exception:
-            logger.exception("OCR LLM call failed")
+        except Exception as exc:
+            logger.exception(
+                "OCR LLM call failed",
+                extra={"error_type": exc.__class__.__name__},
+            )
             output = ""
 
         # Just return whatever LLM gives us
