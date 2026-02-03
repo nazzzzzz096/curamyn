@@ -123,3 +123,34 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/curamyn-frontend:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/curamyn-frontend:${{ github.sha }}
+# ====================================
+#  DEPLOY TO EC2 (CD)
+# ====================================
+  deploy-ec2:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs:
+      - build-backend
+      - build-frontend
+
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "Connected to EC2"
+
+            cd /home/ubuntu
+
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/curamyn-backend:latest
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/curamyn-frontend:latest
+
+            docker compose down
+            docker compose up -d
+
+            echo "Deployment completed "
