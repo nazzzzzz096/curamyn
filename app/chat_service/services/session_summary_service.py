@@ -18,11 +18,31 @@ from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
+
+
+SESSION_SUMMARY_REQUEST_LATENCY = Histogram(
+    "session_summary_request_latency_seconds",
+    "Session summary generation latency",
+    ["model", "provider"],
+)
+
+SESSION_SUMMARY_REQUESTS_TOTAL = Counter(
+    "session_summary_requests_total",
+    "Total session summary requests",
+    ["model", "provider", "status"],
+)
+
+SESSION_SUMMARY_ERRORS_TOTAL = Counter(
+    "session_summary_errors_total",
+    "Total session summary errors",
+    ["model", "provider", "error_type"],
+)
 
 
 # ==================================================
@@ -69,36 +89,62 @@ def _generate_summary_llm(*, prompt: str) -> Dict:
     NEVER used for chat or intent detection.
     """
 
-    client, GenerateContentConfig = _load_gemini()
-    if client is None:
-        raise RuntimeError("Summary LLM unavailable")
-
     start_time = time.time()
+    request_failed = False
+    response = None  # ✅ prevent UnboundLocalError
 
-    with mlflow_context():
-        mlflow_safe(mlflow.set_tag, "service", "session_summary_llm")
-        mlflow_safe(mlflow.set_tag, "llm_provider", "gemini")
+    try:
+        client, GenerateContentConfig = _load_gemini()
+        if client is None:
+            raise RuntimeError("Summary LLM unavailable")
 
-        response = client.models.generate_content(
+        with mlflow_context():
+            mlflow_safe(mlflow.set_tag, "service", "session_summary_llm")
+            mlflow_safe(mlflow.set_tag, "llm_provider", "gemini")
+
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=1200,
+                ),
+            )
+
+            raw = _extract_text(response)
+            if not raw:
+                raise ValueError("Empty summary LLM output")
+
+            mlflow_safe(
+                mlflow.log_metric,
+                "summary_latency_sec",
+                time.time() - start_time,
+            )
+
+            return _safe_parse_json(raw)
+
+    except Exception as exc:
+        request_failed = True
+        SESSION_SUMMARY_ERRORS_TOTAL.labels(
             model=MODEL_NAME,
-            contents=prompt,
-            config=GenerateContentConfig(
-                temperature=0.0,  # deterministic JSON
-                max_output_tokens=1200,  # Increased for detailed summaries
-            ),
-        )
+            provider="gemini",
+            error_type=exc.__class__.__name__,
+        ).inc()
+        raise
 
-        raw = _extract_text(response)
-        if not raw:
-            raise ValueError("Empty summary LLM output")
+    finally:
+        latency = time.time() - start_time
 
-        mlflow_safe(
-            mlflow.log_metric,
-            "summary_latency_sec",
-            time.time() - start_time,
-        )
+        SESSION_SUMMARY_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
 
-        return _safe_parse_json(raw)
+        SESSION_SUMMARY_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure" if request_failed else "success",
+        ).inc()
 
 
 # ==================================================
@@ -235,6 +281,11 @@ Now generate the summary:
     try:
         parsed = _generate_summary_llm(prompt=prompt)
     except Exception:
+        SESSION_SUMMARY_ERRORS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            error_type="llm_failure_fallback",
+        ).inc()
         logger.warning("LLM summary failed; using base summary", exc_info=True)
         return _base_summary_from_transcript(transcript)
 

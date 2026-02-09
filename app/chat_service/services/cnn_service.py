@@ -18,6 +18,7 @@ from app.chat_service.services.model_loader import load_cnn_model_from_s3
 from app.chat_service.utils.logger import get_logger
 from app.chat_service.config import settings
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,40 @@ _TRANSFORM = transforms.Compose(
 # --------------------------------------------------
 _MODEL_CACHE: Dict[str, nn.Module] = {}
 
+# --------------------------------------------------
+# Prometheus metrics for CNN models
+# --------------------------------------------------
+
+CNN_INFERENCE_LATENCY = Histogram(
+    "cnn_inference_latency_seconds",
+    "CNN model inference latency",
+    ["model"],
+)
+
+CNN_REQUESTS_TOTAL = Counter(
+    "cnn_requests_total",
+    "Total CNN inference requests",
+    ["model", "status"],
+)
+
+CNN_ERRORS_TOTAL = Counter(
+    "cnn_errors_total",
+    "Total CNN inference errors",
+    ["model", "error_type"],
+)
+
+CNN_MODEL_LOAD_LATENCY = Histogram(
+    "cnn_model_load_latency_seconds",
+    "CNN model load latency from S3",
+    ["model"],
+)
+
+CNN_MODEL_LOADS_TOTAL = Counter(
+    "cnn_model_loads_total",
+    "Total CNN model loads",
+    ["model"],
+)
+
 
 # --------------------------------------------------
 # Model loader
@@ -48,21 +83,45 @@ def _get_model(model_type: str) -> nn.Module:
     """
     Load and cache CNN model by type.
     """
-    if model_type not in _MODEL_CACHE:
-        logger.info(
-            "Loading CNN model",
-            extra={"model_type": model_type},
-        )
+    if model_type in _MODEL_CACHE:
+        return _MODEL_CACHE[model_type]
 
+    logger.info(
+        "Loading CNN model",
+        extra={"model_type": model_type},
+    )
+
+    load_start = time.time()
+
+    try:
         model = load_cnn_model_from_s3(
             model_type=model_type,
             bucket=settings.S3_BUCKET_NAME,
         )
         model.eval()
 
-        _MODEL_CACHE[model_type] = model
+    except Exception as exc:
+        load_latency = time.time() - load_start
 
-    return _MODEL_CACHE[model_type]
+        #  PROMETHEUS METRICS (MODEL LOAD FAILURE)
+        CNN_MODEL_LOAD_LATENCY.labels(model=model_type).observe(load_latency)
+        CNN_ERRORS_TOTAL.labels(
+            model=model_type,
+            error_type="model_load",
+        ).inc()
+
+        logger.exception("Failed to load CNN model from S3")
+
+        raise RuntimeError(f"Failed to load CNN model: {model_type}") from exc
+
+    load_latency = time.time() - load_start
+
+    #  PROMETHEUS METRICS (MODEL LOAD SUCCESS)
+    CNN_MODEL_LOAD_LATENCY.labels(model=model_type).observe(load_latency)
+    CNN_MODEL_LOADS_TOTAL.labels(model=model_type).inc()
+
+    _MODEL_CACHE[model_type] = model
+    return model
 
 
 # --------------------------------------------------
@@ -121,6 +180,17 @@ def predict_risk(
                 probability = torch.sigmoid(logits).item()
 
         except Exception as exc:
+            #  PROMETHEUS METRICS (ERROR)
+            CNN_ERRORS_TOTAL.labels(
+                model=model_map[image_type],
+                error_type="inference",
+            ).inc()
+
+            CNN_REQUESTS_TOTAL.labels(
+                model=model_map[image_type],
+                status="failure",
+            ).inc()
+
             mlflow_safe(mlflow.set_tag, "status", "failed")
             logger.exception("CNN inference failed")
             raise RuntimeError("Model inference failed") from exc
@@ -128,6 +198,12 @@ def predict_risk(
         risk = "needs_attention" if probability >= settings.RISK_THRESHOLD else "normal"
 
         latency = time.time() - start_time
+        #  PROMETHEUS METRICS (SUCCESS)
+        CNN_INFERENCE_LATENCY.labels(model=model_map[image_type]).observe(latency)
+        CNN_REQUESTS_TOTAL.labels(
+            model=model_map[image_type],
+            status="success",
+        ).inc()
 
         mlflow_safe(mlflow.log_metric, "confidence", probability)
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)

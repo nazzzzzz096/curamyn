@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
 
 
 from app.chat_service.api.ai_routes import router as ai_router
@@ -174,6 +176,20 @@ logger.info(
         ],
     },
 )
+
+
+# =========================================================
+# Prometheus Metrics
+# =========================================================
+@app.get("/metrics")
+def metrics():
+    if os.getenv("CURAMYN_ENV") == "test":
+        return Response("", status_code=204)
+
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 # =========================================================

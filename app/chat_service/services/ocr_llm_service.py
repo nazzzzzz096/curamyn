@@ -6,20 +6,53 @@ Safe for CI and tests.
 import os
 import time
 import re
-from types import SimpleNamespace
-
+import random
+from google.genai.errors import ServerError
 import mlflow
 from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 load_dotenv()
 client = None
 MODEL_NAME = "models/gemini-flash-latest"
-import random
-from google.genai.errors import ServerError
+
+
+# --------------------------------------------------
+# Prometheus metrics for OCR LLM service
+# --------------------------------------------------
+
+OCR_LLM_REQUEST_LATENCY = Histogram(
+    "ocr_llm_request_latency_seconds",
+    "OCR document understanding LLM request latency",
+    ["model", "provider"],
+)
+
+OCR_LLM_REQUESTS_TOTAL = Counter(
+    "ocr_llm_requests_total",
+    "Total OCR LLM requests",
+    ["model", "provider", "status"],
+)
+
+OCR_LLM_ERRORS_TOTAL = Counter(
+    "ocr_llm_errors_total",
+    "Total OCR LLM errors",
+    ["model", "provider", "error_type"],
+)
+
+
+def _normalize_error_type(exc: Exception) -> str:
+    name = exc.__class__.__name__.lower()
+    if "timeout" in name:
+        return "timeout"
+    if "server" in name or "503" in str(exc):
+        return "server_error"
+    if "permission" in name or "auth" in name:
+        return "auth_error"
+    return "unknown_error"
 
 
 def _call_gemini_with_retry(
@@ -187,6 +220,8 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     """
     Summarize a medical laboratory document extracted via OCR.
     """
+    request_failed = False
+
     logger.info(
         "OCR LLM service called",
         extra={"text_length": len(text) if text else 0},
@@ -198,6 +233,22 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
 
     # Reduced minimum length threshold
     if not text or len(text) < 30:
+        OCR_LLM_ERRORS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            error_type="text_too_short",
+        ).inc()
+
+        OCR_LLM_REQUESTS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            status="failure",
+        ).inc()
+
+        OCR_LLM_REQUEST_LATENCY.labels(
+            model="none",
+            provider="gemini",
+        ).observe(0.0)
         logger.warning("OCR text too short")
         return _fallback("The uploaded image could not be read clearly.")
 
@@ -205,6 +256,23 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     if not _is_medical_document(text):
         logger.warning("Text doesn't appear to be medical document")
         logger.debug(f"Full text: {text}")
+        OCR_LLM_ERRORS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            error_type="not_medical_document",
+        ).inc()
+
+        OCR_LLM_REQUESTS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            status="failure",
+        ).inc()
+
+        OCR_LLM_REQUEST_LATENCY.labels(
+            model="none",
+            provider="gemini",
+        ).observe(0.0)
+
         return _fallback(
             "This document does not appear to be a medical laboratory report."
         )
@@ -214,6 +282,22 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
     )
 
     if active_client is None:
+        OCR_LLM_ERRORS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            error_type="client_unavailable",
+        ).inc()
+
+        OCR_LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure",
+        ).inc()
+
+        OCR_LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(0.0)
         return _fallback_text_response()
 
     start = time.time()
@@ -249,19 +333,44 @@ def analyze_ocr_text(*, text: str, user_id: str | None = None) -> dict:
             logger.debug(f"LLM response preview: {output[:200]}")
 
         except Exception as exc:
+            request_failed = True
+
+            OCR_LLM_ERRORS_TOTAL.labels(
+                model=MODEL_NAME,
+                provider="gemini",
+                error_type=_normalize_error_type(exc),
+            ).inc()
+
             logger.exception(
                 "OCR LLM call failed",
-                extra={"error_type": exc.__class__.__name__},
+                extra={"error_type": _normalize_error_type(exc)},
             )
             output = ""
 
         # Just return whatever LLM gives us
         if not output or len(output) < 50:
+            request_failed = True
             logger.warning("OCR LLM returned insufficient output")
             output = _fallback_text()
 
         latency = time.time() - start
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
+        OCR_LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
+
+        OCR_LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure" if request_failed else "success",
+        ).inc()
+
+        mlflow_safe(
+            mlflow.set_tag,
+            "status",
+            "failure" if request_failed else "success",
+        )
 
         return {
             "intent": "document_understanding",
@@ -320,10 +429,9 @@ def _fallback_text() -> str:
         str: Default fallback message explaining the limitation
     """
     return (
-        "This appears to be a medical laboratory document. "
-        "However, the extracted text does not provide enough structure "
-        "to confidently summarize specific sections. "
-        "Please upload a clearer image."
+        "I extracted the text from your document, "
+        "but I couldn’t analyze it further right now. "
+        "You can ask about specific terms if you want."
     )
 
 

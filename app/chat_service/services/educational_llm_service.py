@@ -13,11 +13,34 @@ from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
+
+# --------------------------------------------------
+# Prometheus metrics for Educational LLM service
+# --------------------------------------------------
+
+EDU_LLM_REQUEST_LATENCY = Histogram(
+    "educational_llm_request_latency_seconds",
+    "Educational LLM request latency",
+    ["model", "provider"],
+)
+
+EDU_LLM_REQUESTS_TOTAL = Counter(
+    "educational_llm_requests_total",
+    "Total Educational LLM requests",
+    ["model", "provider", "status"],
+)
+
+EDU_LLM_ERRORS_TOTAL = Counter(
+    "educational_llm_errors_total",
+    "Total Educational LLM errors",
+    ["model", "provider", "error_type"],
+)
 
 
 def _load_gemini():
@@ -50,10 +73,29 @@ def explain_medical_terms(
     Explain medical terms OR summarize document from user's uploaded file.
     """
     logger.info("Educational mode activated")
+    request_failed = False
 
     client, GenerateContentConfig = _load_gemini()
 
     if client is None:
+        latency = 0.0
+
+        EDU_LLM_ERRORS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            error_type="client_unavailable",
+        ).inc()
+
+        EDU_LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
+
+        EDU_LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure",
+        ).inc()
         return {
             "intent": "educational",
             "severity": "informational",
@@ -159,11 +201,28 @@ Provide a clear, educational explanation in 2-4 sentences."""
             output = _extract_text(response)
 
         except Exception:
+            request_failed = True
             logger.exception("Educational LLM call failed")
+            EDU_LLM_ERRORS_TOTAL.labels(
+                model=MODEL_NAME,
+                provider="gemini",
+                error_type="generation",
+            ).inc()
             output = "I'm having trouble processing that right now. Please try again."
 
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
+        #  PROMETHEUS METRICS
+        EDU_LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
+
+        EDU_LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure" if request_failed else "success",
+        ).inc()
 
         return {
             "intent": "educational",

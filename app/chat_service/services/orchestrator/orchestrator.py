@@ -161,7 +161,7 @@ async def run_interaction(
 
     except Exception as exc:
         logger.exception("Unhandled interaction error")
-        return {"message": "Something went wrong while processing your request."}
+        return {"message": f"Something went wrong while processing your request.{exc}"}
 
 
 # ===================== HELPERS =====================

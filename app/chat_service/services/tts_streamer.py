@@ -10,8 +10,13 @@ import io
 import subprocess
 import wave
 from typing import Optional
-
+import time
 from app.chat_service.utils.logger import get_logger
+from app.observability.metrics import (
+    TTS_REQUEST_LATENCY,
+    TTS_REQUESTS_TOTAL,
+    TTS_ERRORS_TOTAL,
+)
 
 logger = get_logger(__name__)
 
@@ -159,32 +164,90 @@ def synthesize_tts(text: str, cache_key: Optional[str] = None) -> bytes:
     Raises:
         RuntimeError: If TTS generation fails
     """
-    text = _truncate_text(text, max_chars=200)
-    # Check cache first
-    if cache_key and cache_key in _TTS_CACHE:
-        logger.debug(f"🎯 Using cached TTS for '{cache_key}'")
-        return _TTS_CACHE[cache_key]
 
-    #  Limit text length for faster generation (preserve word boundaries)
-    MAX_CHARS = 400
-    if len(text) > MAX_CHARS:
-        # Find last space before MAX_CHARS to avoid cutting mid-word
-        truncated = text[:MAX_CHARS]
-        last_space = truncated.rfind(" ")
-        if last_space > 0:
-            truncated = truncated[:last_space]
-        text = truncated + "..."
-        logger.debug(f"Truncated text to {len(text)} chars")
+    start_time = time.time()
+    source = "cache" if cache_key and cache_key in _TTS_CACHE else "generated"
 
-    # Generate audio
-    audio_bytes = _synthesize_piper(text)
+    try:
+        text = _truncate_text(text, max_chars=200)
 
-    # Store in cache if key provided
-    if cache_key:
-        _TTS_CACHE[cache_key] = audio_bytes
-        logger.debug(f"Cached TTS for '{cache_key}'")
+        #  CACHE HIT
+        if cache_key and cache_key in _TTS_CACHE:
+            audio = _TTS_CACHE[cache_key]
 
-    return audio_bytes
+            TTS_REQUESTS_TOTAL.labels(
+                engine="piper",
+                status="success",
+                source="cache",
+            ).inc()
+
+            return audio
+
+        #  REAL TTS GENERATION
+        audio_bytes = _synthesize_piper(text)
+
+        if not audio_bytes:
+            TTS_ERRORS_TOTAL.labels(
+                engine="piper",
+                error_type="audio_empty",
+            ).inc()
+            raise RuntimeError("audio_empty")
+
+        if cache_key:
+            _TTS_CACHE[cache_key] = audio_bytes
+
+        TTS_REQUESTS_TOTAL.labels(
+            engine="piper",
+            status="success",
+            source="generated",
+        ).inc()
+
+        return audio_bytes
+
+    except subprocess.TimeoutExpired:
+        TTS_ERRORS_TOTAL.labels(
+            engine="piper",
+            error_type="timeout",
+        ).inc()
+
+        TTS_REQUESTS_TOTAL.labels(
+            engine="piper",
+            status="failure",
+            source=source,
+        ).inc()
+        raise
+
+    except subprocess.CalledProcessError:
+        TTS_ERRORS_TOTAL.labels(
+            engine="piper",
+            error_type="subprocess",
+        ).inc()
+
+        TTS_REQUESTS_TOTAL.labels(
+            engine="piper",
+            status="failure",
+            source=source,
+        ).inc()
+        raise
+
+    except Exception as exc:
+        TTS_ERRORS_TOTAL.labels(
+            engine="piper",
+            error_type="unknown",
+        ).inc()
+
+        TTS_REQUESTS_TOTAL.labels(
+            engine="piper",
+            status="failure",
+            source=source,
+        ).inc()
+        raise
+
+    finally:
+        TTS_REQUEST_LATENCY.labels(
+            engine="piper",
+            source=source,
+        ).observe(time.time() - start_time)
 
 
 def _truncate_text(text: str, max_chars: int = 200) -> str:

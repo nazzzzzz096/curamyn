@@ -8,20 +8,27 @@ import os
 import asyncio
 from typing import Optional
 from deepgram import DeepgramClient, PrerecordedOptions, FileSource
-
+from app.chat_service.services.whisper_service import transcribe
 from app.chat_service.utils.logger import get_logger
+import time
+from app.observability.metrics import (
+    STT_REQUEST_LATENCY,
+    STT_REQUESTS_TOTAL,
+    STT_ERRORS_TOTAL,
+    STT_FALLBACKS_TOTAL,
+)
 
 logger = get_logger(__name__)
 
 # Singleton client
-_deepgram_client: Optional[DeepgramClient] = None
+_DEEPGRAM_CLIENT: Optional[DeepgramClient] = None
 
 
 def get_deepgram_client() -> DeepgramClient:
     """Get or create Deepgram client."""
-    global _deepgram_client
+    global _DEEPGRAM_CLIENT
 
-    if _deepgram_client is None:
+    if _DEEPGRAM_CLIENT is None:
         api_key = os.getenv("CURAMYN_DEEPGRAM_API_KEY")
 
         if not api_key:
@@ -30,10 +37,10 @@ def get_deepgram_client() -> DeepgramClient:
                 "Get one from https://console.deepgram.com"
             )
 
-        _deepgram_client = DeepgramClient(api_key=api_key)
+        _DEEPGRAM_CLIENT = DeepgramClient(api_key=api_key)
         logger.info("✅ Deepgram client initialized")
 
-    return _deepgram_client
+    return _DEEPGRAM_CLIENT
 
 
 async def transcribe_audio(audio_bytes: bytes, use_fallback: bool = True) -> str:
@@ -50,66 +57,109 @@ async def transcribe_audio(audio_bytes: bytes, use_fallback: bool = True) -> str
     Raises:
         RuntimeError: If all transcription methods fail
     """
-    if not audio_bytes or len(audio_bytes) == 0:
-        logger.warning("Empty audio bytes received")
+    if not audio_bytes:
         return ""
 
+    # ------------------ DEEPGRAM ------------------
+    deepgram_start = time.time()
+
     try:
-        #  TRY DEEPGRAM FIRST
         client = get_deepgram_client()
 
         payload: FileSource = {"buffer": audio_bytes}
-
         options = PrerecordedOptions(
             model="nova-2",
             language="en",
             smart_format=True,
             punctuate=True,
-            diarize=False,
-            utterances=False,
         )
 
-        logger.debug(f"Starting Deepgram transcription ({len(audio_bytes)} bytes)")
-
-        # Run in thread to not block event loop
         response = await asyncio.to_thread(
             client.listen.prerecorded.v("1").transcribe_file,
             payload,
             options,
         )
 
-        # Extract transcript
         transcript = response.results.channels[0].alternatives[0].transcript.strip()
 
         if not transcript:
-            raise ValueError("Deepgram returned empty transcript")
+            raise ValueError("empty transcript")
 
-        confidence = response.results.channels[0].alternatives[0].confidence
-
-        logger.info(
-            f"✅ Deepgram transcription successful: '{transcript[:50]}...' "
-            f"(confidence: {confidence:.2f})"
-        )
+        STT_REQUESTS_TOTAL.labels(
+            engine="deepgram",
+            status="success",
+        ).inc()
 
         return transcript
 
-    except Exception as exc:
-        logger.warning(f"⚠️ Deepgram failed: {exc}")
+    except ValueError:
+        STT_ERRORS_TOTAL.labels(
+            engine="deepgram",
+            error_type="empty_transcript",
+        ).inc()
 
-        #  FALLBACK TO WHISPER
-        if use_fallback:
-            logger.info("🔄 Falling back to Whisper STT...")
-            try:
-                from app.chat_service.services.whisper_service import transcribe
+        STT_REQUESTS_TOTAL.labels(
+            engine="deepgram",
+            status="failure",
+        ).inc()
 
-                result = transcribe(audio_bytes)
-                logger.info("✅ Whisper fallback successful")
-                return result
-            except Exception as whisper_exc:
-                logger.exception("❌ Whisper fallback also failed")
-                raise RuntimeError("All STT methods failed") from whisper_exc
+        logger.warning("Deepgram returned empty transcript")
 
-        raise RuntimeError("Deepgram transcription failed") from exc
+    except Exception:
+        STT_ERRORS_TOTAL.labels(
+            engine="deepgram",
+            error_type="api_error",
+        ).inc()
+
+        STT_REQUESTS_TOTAL.labels(
+            engine="deepgram",
+            status="failure",
+        ).inc()
+
+        logger.warning("Deepgram failed", exc_info=True)
+
+    finally:
+        STT_REQUEST_LATENCY.labels(
+            engine="deepgram",
+        ).observe(time.time() - deepgram_start)
+
+    # ------------------ FALLBACK TO WHISPER ------------------
+    if not use_fallback:
+        raise RuntimeError("Deepgram failed and fallback disabled")
+
+    STT_FALLBACKS_TOTAL.labels(
+        from_engine="deepgram",
+        to_engine="whisper",
+    ).inc()
+
+    whisper_start = time.time()
+    try:
+        result = transcribe(audio_bytes)
+
+        STT_REQUESTS_TOTAL.labels(
+            engine="whisper",
+            status="success",
+        ).inc()
+
+        return result
+
+    except Exception:
+        STT_ERRORS_TOTAL.labels(
+            engine="whisper",
+            error_type="whisper_failed",
+        ).inc()
+
+        STT_REQUESTS_TOTAL.labels(
+            engine="whisper",
+            status="failure",
+        ).inc()
+
+        raise RuntimeError("All STT failed")
+
+    finally:
+        STT_REQUEST_LATENCY.labels(
+            engine="whisper",
+        ).observe(time.time() - whisper_start)
 
 
 def transcribe_sync(audio_bytes: bytes) -> str:

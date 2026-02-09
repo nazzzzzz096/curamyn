@@ -16,11 +16,34 @@ from dotenv import load_dotenv
 
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 load_dotenv()
 
 MODEL_NAME = "models/gemini-flash-latest"
+
+# --------------------------------------------------
+# Prometheus metrics for LLM service
+# --------------------------------------------------
+
+LLM_REQUEST_LATENCY = Histogram(
+    "llm_request_latency_seconds",
+    "LLM request end-to-end latency",
+    ["model", "provider"],
+)
+
+LLM_REQUESTS_TOTAL = Counter(
+    "llm_requests_total",
+    "Total LLM requests",
+    ["model", "provider", "status"],
+)
+
+LLM_ERRORS_TOTAL = Counter(
+    "llm_errors_total",
+    "Total LLM errors",
+    ["model", "provider", "error_type"],
+)
 
 
 # --------------------------------------------------
@@ -73,12 +96,30 @@ def analyze_text(
     """
     Voice psychologist / general chat LLM.
     """
+    request_failed = False
 
     # Respect patched client in unit tests
     active_client, GenerateContentConfig = _load_gemini()
-    start_time = time.time()
+
     # ---------------- FALLBACK MODE ----------------
     if active_client is None:
+        latency = 0.0
+        LLM_ERRORS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            error_type="client_unavailable",
+        ).inc()
+
+        LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
+
+        LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure",
+        ).inc()
         return {
             "intent": "casual_chat",
             "sentiment": "neutral",
@@ -111,11 +152,17 @@ def analyze_text(
             emotion = analysis.get("emotion", "neutral")
 
         except Exception:
+            request_failed = True
             logger.warning("Intent analysis failed; using defaults")
             severity = "low"
             intent = "casual_chat"
             sentiment = "neutral"
             emotion = "neutral"
+            LLM_ERRORS_TOTAL.labels(
+                model=MODEL_NAME,
+                provider="gemini",
+                error_type="analysis",
+            ).inc()
 
         # -------- STAGE 2: RESPONSE --------
         try:
@@ -126,12 +173,29 @@ def analyze_text(
                 GenerateContentConfig=GenerateContentConfig,
             )
         except Exception:
+            request_failed = True
             logger.exception("LLM response generation failed")
             spoken_text = "I'm here with you."
+            LLM_ERRORS_TOTAL.labels(
+                model=MODEL_NAME,
+                provider="gemini",
+                error_type="generation",
+            ).inc()
 
         latency = time.time() - start_time
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
         mlflow_safe(mlflow.log_param, "severity", severity)
+        #  PROMETHEUS METRICS (SUCCESS)
+        LLM_REQUEST_LATENCY.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+        ).observe(latency)
+
+        LLM_REQUESTS_TOTAL.labels(
+            model=MODEL_NAME,
+            provider="gemini",
+            status="failure" if request_failed else "success",
+        ).inc()
 
         return {
             "intent": intent,

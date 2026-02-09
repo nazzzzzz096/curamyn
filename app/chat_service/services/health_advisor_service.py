@@ -11,12 +11,34 @@ from dotenv import load_dotenv
 from app.chat_service.utils.logger import get_logger
 from app.common.mlflow_control import mlflow_context, mlflow_safe
 from app.chat_service.services.markdown_cleaner import clean_llm_response
+from prometheus_client import Counter, Histogram
 
 logger = get_logger(__name__)
 load_dotenv()
 
 PRIMARY_MODEL = "models/gemini-flash-latest"
 FALLBACK_MODEL = "models/gemini-flash-lite-latest"
+# --------------------------------------------------
+# Prometheus metrics for Health Advisor LLM
+# --------------------------------------------------
+
+HEALTH_LLM_REQUEST_LATENCY = Histogram(
+    "health_llm_request_latency_seconds",
+    "Health advisor LLM request latency",
+    ["model", "provider"],
+)
+
+HEALTH_LLM_REQUESTS_TOTAL = Counter(
+    "health_llm_requests_total",
+    "Total Health advisor LLM requests",
+    ["model", "provider", "status"],
+)
+
+HEALTH_LLM_ERRORS_TOTAL = Counter(
+    "health_llm_errors_total",
+    "Total Health advisor LLM errors",
+    ["model", "provider", "error_type"],
+)
 
 
 def _load_gemini():
@@ -49,6 +71,7 @@ def analyze_health_text(
     """
     FIXED: Health advisor LLM with increased token limits to prevent truncation
     """
+    request_failed = False
 
     client, GenerateContentConfig = _load_gemini()
 
@@ -131,6 +154,24 @@ def analyze_health_text(
         }
 
     if client is None:
+        latency = 0.0
+
+        HEALTH_LLM_ERRORS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            error_type="client_unavailable",
+        ).inc()
+
+        HEALTH_LLM_REQUEST_LATENCY.labels(
+            model="none",
+            provider="gemini",
+        ).observe(latency)
+
+        HEALTH_LLM_REQUESTS_TOTAL.labels(
+            model="none",
+            provider="gemini",
+            status="failure",
+        ).inc()
         logger.error("LLM client unavailable")
         return {
             "intent": "health_support",
@@ -177,6 +218,12 @@ def analyze_health_text(
                 logger.warning("Primary model returned empty text")
 
         except Exception as exc:
+            request_failed = True
+            HEALTH_LLM_ERRORS_TOTAL.labels(
+                model=PRIMARY_MODEL,
+                provider="gemini",
+                error_type="primary_model",
+            ).inc()
             logger.warning("Primary model failed: %s", exc)
 
         # FALLBACK MODEL
@@ -202,9 +249,16 @@ def analyze_health_text(
                     logger.warning("Fallback model returned empty text")
 
             except Exception as exc:
+                request_failed = True
+                HEALTH_LLM_ERRORS_TOTAL.labels(
+                    model=FALLBACK_MODEL,
+                    provider="gemini",
+                    error_type="fallback_model",
+                ).inc()
                 logger.exception("Fallback model failed")
 
         if not answer:
+            request_failed = True
             logger.warning("LLM returned empty output — using SAFE_FALLBACK")
             answer = SAFE_FALLBACK
             model_used = "safe_fallback"
@@ -218,6 +272,17 @@ def analyze_health_text(
         mlflow_safe(mlflow.log_metric, "latency_sec", latency)
         mlflow_safe(mlflow.log_metric, "response_length", len(answer))
         mlflow_safe(mlflow.set_tag, "model_used", model_used)
+        #  PROMETHEUS METRICS
+        HEALTH_LLM_REQUEST_LATENCY.labels(
+            model=model_used or "unknown",
+            provider="gemini",
+        ).observe(latency)
+
+        HEALTH_LLM_REQUESTS_TOTAL.labels(
+            model=model_used or "unknown",
+            provider="gemini",
+            status="failure" if request_failed else "success",
+        ).inc()
 
     return {
         "intent": "health_support",
